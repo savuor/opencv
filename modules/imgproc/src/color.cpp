@@ -5801,6 +5801,12 @@ static ushort sRGBGammaTab_b[256], linearGammaTab_b[256];
 #define LAB_CBRT_TAB_SIZE_B (256*3/2*(1<<gamma_shift))
 static ushort LabCbrtTab_b[LAB_CBRT_TAB_SIZE_B];
 
+static const bool useTetraInterpolation = true;
+enum { LAB_LUT_DIM = 64};
+static float Lab2XYZLUT[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3];
+static float XYZ2LabLUT[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3];
+
+
 static void initLabTabs()
 {
     static bool initialized = false;
@@ -5838,8 +5844,162 @@ static void initLabTabs()
             LabCbrtTab_b[i] = saturate_cast<ushort>((1 << lab_shift2)*(x < 0.008856f ? x*7.787f + 0.13793103448275862f : cvCbrt(x)));
         }
         initialized = true;
+
+        if(useTetraInterpolation)
+        {
+            static const float lThresh = 0.008856f * 903.3f;
+            static const float fThresh = 7.787f * 0.008856f + 16.0f / 116.0f;
+            static const float _1_3 = 1.0f / 3.0f;
+            static const float _a = 16.0f / 116.0f;
+            for(int p = 0; p < LAB_LUT_DIM; p++)
+            {
+                for(int q = 0; q < LAB_LUT_DIM; q++)
+                {
+                    for(int r = 0; r < LAB_LUT_DIM; r++)
+                    {
+                        //Lab 2 XYZ LUT building
+                        float li = 100.0*p/LAB_LUT_DIM;
+                        float ai = 256.0*q/LAB_LUT_DIM - 128.0;
+                        float bi = 256.0*r/LAB_LUT_DIM - 128.0;
+
+                        float y, fy;
+                        if (li <= lThresh)
+                        {
+                            y = li / 903.3f;
+                            fy = 7.787f * y + 16.0f / 116.0f;
+                        }
+                        else
+                        {
+                            fy = (li + 16.0f) / 116.0f;
+                            y = fy * fy * fy;
+                        }
+
+                        float fxz[] = { ai / 500.0f + fy, fy - bi / 200.0f };
+
+                        for (int j = 0; j < 2; j++)
+                            if (fxz[j] <= fThresh)
+                                fxz[j] = (fxz[j] - 16.0f / 116.0f) / 7.787f;
+                            else
+                                fxz[j] = fxz[j] * fxz[j] * fxz[j];
+
+                        float x = fxz[0], z = fxz[1];
+
+                        Lab2XYZLUT[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r]     = x;
+                        Lab2XYZLUT[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 1] = y;
+                        Lab2XYZLUT[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 2] = z;
+
+                        //XYZ 2 Lab LUT building
+                        float X = 1.0*p/LAB_LUT_DIM;
+                        float Y = 1.0*q/LAB_LUT_DIM;
+                        float Z = 1.0*r/LAB_LUT_DIM;
+
+                        float FX = X > 0.008856f ? std::pow(X, _1_3) : (7.787f * X + _a);
+                        float FY = Y > 0.008856f ? std::pow(Y, _1_3) : (7.787f * Y + _a);
+                        float FZ = Z > 0.008856f ? std::pow(Z, _1_3) : (7.787f * Z + _a);
+
+                        float L = Y > 0.008856f ? (116.f * FY - 16.f) : (903.3f * Y);
+                        float a = 500.f * (FX - FY);
+                        float b = 200.f * (FY - FZ);
+
+                        XYZ2LabLUT[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r]     = L;
+                        XYZ2LabLUT[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 1] = a;
+                        XYZ2LabLUT[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 2] = b;
+                    }
+                }
+            }
+        }
     }
 }
+
+
+static inline void tetraInterpolate(float cx, float cy, float cz, float* LUT,
+                                    float& a, float& b, float& c)
+{
+    CV_Assert((cx >= 0) && (cx <= 1) && (cy >= 0) && (cy <= 1) && (cz >= 0) && (cz <= 1));
+    /* The idea is taken from the article:
+     * Performing color space conversions with three-dimensional linear interpolation
+     * by James M. Kasson, Sigfredo I. Nm, Wil Plouffe, James L. Hafner
+     * Journal of Electronic Imaging 4(3), 226—250 (July 1995).
+     */
+
+    //LUT idx of [0 0 0] pt of cube
+    int tx = std::min(cvFloor(cx*LAB_LUT_DIM), LAB_LUT_DIM-1);
+    int ty = std::min(cvFloor(cy*LAB_LUT_DIM), LAB_LUT_DIM-1);
+    int tz = std::min(cvFloor(cz*LAB_LUT_DIM), LAB_LUT_DIM-1);
+    float x = cx - tx*LAB_LUT_DIM;
+    float y = cy - ty*LAB_LUT_DIM;
+    float z = cz - tz*LAB_LUT_DIM;
+
+    int nTetra = -1;
+    if(x > y)
+    {
+        if(y < z) nTetra = 0;
+        else if(x > z) nTetra = 5; else nTetra = 4;
+    }
+    else
+    {
+        if(y > z)
+        {
+            if(x > z) nTetra = 1; else nTetra = 3;
+        }
+        else nTetra = 2;
+    }
+
+#define SETPT(_a, _b, _c, _x, _y, _z) \
+    do\
+    {\
+        (_a) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z))];\
+        (_b) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 1];\
+        (_c) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 2];\
+    }\
+    while(0)
+
+    float w0, w1, w2, w3;
+    float a0, a1, a2, a3, b0, b1, b2, b3, c0, c1, c2, c3;
+    SETPT(a0, b0, c0, 0, 0, 0);
+    SETPT(a3, b3, c3, 1, 1, 1);
+    switch(nTetra)
+    {
+    case 0:
+        w0 = 1 - x; w1 = x - y; w2 = y - z; w3 = z;
+        SETPT(a1, b1, c1, 1, 0, 0);
+        SETPT(a2, b2, c2, 1, 1, 0);
+        break;
+    case 1:
+        w0 = 1 - y; w1 = y - x; w2 = x - z; w3 = z;
+        SETPT(a1, b1, c1, 0, 1, 0);
+        SETPT(a2, b2, c2, 1, 1, 0);
+        break;
+    case 2:
+        w0 = 1 - z; w1 = z - y; w2 = y - x; w3 = x;
+        SETPT(a1, b1, c1, 0, 0, 1);
+        SETPT(a2, b2, c2, 0, 1, 1);
+        break;
+    case 3:
+        w0 = 1 - y; w1 = y - z; w2 = z - x; w3 = x;
+        SETPT(a1, b1, c1, 0, 1, 0);
+        SETPT(a2, b2, c2, 0, 1, 1);
+        break;
+    case 4:
+        w0 = 1 - z; w1 = z - x; w2 = x - y; w3 = y;
+        SETPT(a1, b1, c1, 0, 0, 1);
+        SETPT(a2, b2, c2, 1, 0, 1);
+        break;
+    case 5:
+        w0 = 1 - x; w1 = x - z; w2 = z - y; w3 = y;
+        SETPT(a1, b1, c1, 1, 0, 0);
+        SETPT(a2, b2, c2, 1, 0, 1);
+        break;
+    default: CV_Error(CV_StsInternal, "No tetrahedron found");
+    }
+
+#undef SETPT
+
+    a = a0*w0 + a1*w1 + a2*w2 + a3*w3;
+    b = b0*w0 + b1*w1 + b2*w2 + b3*w3;
+    c = c0*w0 + c1*w1 + c2*w2 + c3*w3;
+}
+
 
 struct RGB2Lab_b
 {
@@ -6118,6 +6278,38 @@ struct Lab2RGB_f
         float alpha = ColorChannel<float>::max();
         n *= 3;
 
+        if(useTetraInterpolation)
+        {
+            for (; i < n; i += 3, dst += dcn)
+            {
+                float li = src[i];
+                float ai = src[i + 1];
+                float bi = src[i + 2];
+
+                float x, y, z;
+                // sic! -127 <= a,b <= 127, that's why 254.0 and 127.0
+                tetraInterpolate(li/100.0f, (ai+127.0f)/254.0f, (bi+127.0f)/254.0f, Lab2XYZLUT, x, y, z);
+
+                float ro = C0 * x + C1 * y + C2 * z;
+                float go = C3 * x + C4 * y + C5 * z;
+                float bo = C6 * x + C7 * y + C8 * z;
+                ro = clip(ro);
+                go = clip(go);
+                bo = clip(bo);
+
+                if (gammaTab)
+                {
+                    ro = splineInterpolate(ro * gscale, gammaTab, GAMMA_TAB_SIZE);
+                    go = splineInterpolate(go * gscale, gammaTab, GAMMA_TAB_SIZE);
+                    bo = splineInterpolate(bo * gscale, gammaTab, GAMMA_TAB_SIZE);
+                }
+
+                dst[0] = ro, dst[1] = go, dst[2] = bo;
+                if( dcn == 4 )
+                    dst[3] = alpha;
+            }
+        }
+
         #if CV_SSE2
         if (haveSIMD)
         {
@@ -6206,7 +6398,6 @@ struct Lab2RGB_f
                     fxz[j] = (fxz[j] - 16.0f / 116.0f) / 7.787f;
                 else
                     fxz[j] = fxz[j] * fxz[j] * fxz[j];
-
 
             float x = fxz[0], z = fxz[1];
             float ro = C0 * x + C1 * y + C2 * z;
