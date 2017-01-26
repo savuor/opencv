@@ -5801,11 +5801,19 @@ static ushort sRGBGammaTab_b[256], linearGammaTab_b[256];
 #define LAB_CBRT_TAB_SIZE_B (256*3/2*(1<<gamma_shift))
 static ushort LabCbrtTab_b[LAB_CBRT_TAB_SIZE_B];
 
-static const bool useTetraInterpolation = true;
-enum { LAB_LUT_DIM = 64};
-static float Lab2XYZLUT[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3];
-static float XYZ2LabLUT[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3];
+static const bool enableTetraInterpolation = true;
+enum
+{
+    LAB_LUT_DIM = 64+1,
+    lab_lut_shift = 6,
+    lab_base_shift = 14,
+    LAB_BASE = (1 << lab_base_shift),
+};
+static int Lab2RGBLUT[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3];
+static int RGB2LabLUT[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3];
 
+#define clip(value) \
+    value < 0.0f ? 0.0f : value > 1.0f ? 1.0f : value;
 
 static void initLabTabs()
 {
@@ -5845,19 +5853,55 @@ static void initLabTabs()
         }
         initialized = true;
 
-        if(useTetraInterpolation)
+        if(enableTetraInterpolation)
         {
             static const float lThresh = 0.008856f * 903.3f;
             static const float fThresh = 7.787f * 0.008856f + 16.0f / 116.0f;
             static const float _1_3 = 1.0f / 3.0f;
             static const float _a = 16.0f / 116.0f;
+
+            const float* gammaTab = sRGBInvGammaTab;
+            float gscale = GammaTabScale;
+
+            const float* _whitept = D65;
+            float coeffs[9];
+
+            //Lab2RGB coeffs
+            for(i = 0; i < 3; i++ )
+            {
+                coeffs[i+2*3] = XYZ2sRGB_D65[i]*_whitept[i];
+                coeffs[i+1*3] = XYZ2sRGB_D65[i+3]*_whitept[i];
+                coeffs[i+0*3] = XYZ2sRGB_D65[i+6]*_whitept[i];
+            }
+            float C0 = coeffs[0], C1 = coeffs[1], C2 = coeffs[2],
+                  C3 = coeffs[3], C4 = coeffs[4], C5 = coeffs[5],
+                  C6 = coeffs[6], C7 = coeffs[7], C8 = coeffs[8];
+
+            //RGB2Lab coeffs
+            float scaleWhite[] = { 1.0f / _whitept[0], 1.0f, 1.0f / _whitept[2] };
+
+            for(i = 0; i < 3; i++ )
+            {
+                int j = i * 3;
+                coeffs[j + 2] = sRGB2XYZ_D65[j]     * scaleWhite[i];
+                coeffs[j + 1] = sRGB2XYZ_D65[j + 1] * scaleWhite[i];
+                coeffs[j + 0] = sRGB2XYZ_D65[j + 2] * scaleWhite[i];
+
+                CV_Assert( coeffs[j] >= 0 && coeffs[j + 1] >= 0 && coeffs[j + 2] >= 0 &&
+                           coeffs[j] + coeffs[j + 1] + coeffs[j + 2] < 1.5f*LabCbrtTabScale );
+            }
+
+            float D0 = coeffs[0], D1 = coeffs[1], D2 = coeffs[2],
+                  D3 = coeffs[3], D4 = coeffs[4], D5 = coeffs[5],
+                  D6 = coeffs[6], D7 = coeffs[7], D8 = coeffs[8];
+
             for(int p = 0; p < LAB_LUT_DIM; p++)
             {
                 for(int q = 0; q < LAB_LUT_DIM; q++)
                 {
                     for(int r = 0; r < LAB_LUT_DIM; r++)
                     {
-                        //Lab 2 XYZ LUT building
+                        //Lab 2 RGB LUTs building
                         float li = 100.0*p/LAB_LUT_DIM;
                         float ai = 256.0*q/LAB_LUT_DIM - 128.0;
                         float bi = 256.0*r/LAB_LUT_DIM - 128.0;
@@ -5884,14 +5928,35 @@ static void initLabTabs()
 
                         float x = fxz[0], z = fxz[1];
 
-                        Lab2XYZLUT[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r]     = x;
-                        Lab2XYZLUT[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 1] = y;
-                        Lab2XYZLUT[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 2] = z;
+                        float ro = C0 * x + C1 * y + C2 * z;
+                        float go = C3 * x + C4 * y + C5 * z;
+                        float bo = C6 * x + C7 * y + C8 * z;
+                        ro = clip(ro);
+                        go = clip(go);
+                        bo = clip(bo);
 
-                        //XYZ 2 Lab LUT building
-                        float X = 1.0*p/LAB_LUT_DIM;
-                        float Y = 1.0*q/LAB_LUT_DIM;
-                        float Z = 1.0*r/LAB_LUT_DIM;
+                        //TODO: replace by true calculation
+                        ro = splineInterpolate(ro * gscale, gammaTab, GAMMA_TAB_SIZE);
+                        go = splineInterpolate(go * gscale, gammaTab, GAMMA_TAB_SIZE);
+                        bo = splineInterpolate(bo * gscale, gammaTab, GAMMA_TAB_SIZE);
+
+                        Lab2RGBLUT[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r]     = cvRound(LAB_BASE*ro);
+                        Lab2RGBLUT[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 1] = cvRound(LAB_BASE*go);
+                        Lab2RGBLUT[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 2] = cvRound(LAB_BASE*bo);
+
+                        //RGB 2 Lab LUT building
+                        float R = 1.0*p/LAB_LUT_DIM;
+                        float G = 1.0*q/LAB_LUT_DIM;
+                        float B = 1.0*r/LAB_LUT_DIM;
+
+                        //TODO: replace by true calculation
+                        R = splineInterpolate(R * gscale, gammaTab, GAMMA_TAB_SIZE);
+                        G = splineInterpolate(G * gscale, gammaTab, GAMMA_TAB_SIZE);
+                        B = splineInterpolate(B * gscale, gammaTab, GAMMA_TAB_SIZE);
+
+                        float X = R*D0 + G*D1 + B*D2;
+                        float Y = R*D3 + G*D4 + B*D5;
+                        float Z = R*D6 + G*D7 + B*D8;
 
                         float FX = X > 0.008856f ? std::pow(X, _1_3) : (7.787f * X + _a);
                         float FY = Y > 0.008856f ? std::pow(Y, _1_3) : (7.787f * Y + _a);
@@ -5901,9 +5966,9 @@ static void initLabTabs()
                         float a = 500.f * (FX - FY);
                         float b = 200.f * (FY - FZ);
 
-                        XYZ2LabLUT[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r]     = L;
-                        XYZ2LabLUT[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 1] = a;
-                        XYZ2LabLUT[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 2] = b;
+                        RGB2LabLUT[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r]     = cvRound(LAB_BASE*L/100.0f);
+                        RGB2LabLUT[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 1] = cvRound(LAB_BASE*(a+128.0f)/256.0f);
+                        RGB2LabLUT[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 2] = cvRound(LAB_BASE*(b+128.0f)/256.0f);
                     }
                 }
             }
@@ -5912,23 +5977,27 @@ static void initLabTabs()
 }
 
 
-static inline void tetraInterpolate(float cx, float cy, float cz, float* LUT,
-                                    float& a, float& b, float& c)
+static inline void tetraInterpolate(int cx, int cy, int cz, int* LUT,
+                                    int& a, int& b, int& c)
 {
-    CV_Assert((cx >= 0) && (cx <= 1) && (cy >= 0) && (cy <= 1) && (cz >= 0) && (cz <= 1));
     /* The idea is taken from the article:
      * Performing color space conversions with three-dimensional linear interpolation
      * by James M. Kasson, Sigfredo I. Nm, Wil Plouffe, James L. Hafner
      * Journal of Electronic Imaging 4(3), 226—250 (July 1995).
      */
 
-    //LUT idx of [0 0 0] pt of cube
-    int tx = std::min(cvFloor(cx*LAB_LUT_DIM), LAB_LUT_DIM-1);
-    int ty = std::min(cvFloor(cy*LAB_LUT_DIM), LAB_LUT_DIM-1);
-    int tz = std::min(cvFloor(cz*LAB_LUT_DIM), LAB_LUT_DIM-1);
-    float x = cx - tx*LAB_LUT_DIM;
-    float y = cy - ty*LAB_LUT_DIM;
-    float z = cz - tz*LAB_LUT_DIM;
+    CV_Assert(cx >= 0 && cy >= 0 && cz >= 0 && cx <= LAB_BASE && cy <= LAB_BASE && cz <= LAB_BASE);
+
+    //cx, cy, cz, x, y, z are [0; LAB_BASE)
+
+    //LUT idx of origin pt of cube
+    int tx = cx >> (lab_base_shift - lab_lut_shift);
+    int ty = cy >> (lab_base_shift - lab_lut_shift);
+    int tz = cz >> (lab_base_shift - lab_lut_shift);
+
+    int x = (cx - (tx << (lab_base_shift - lab_lut_shift))) << lab_lut_shift;
+    int y = (cy - (ty << (lab_base_shift - lab_lut_shift))) << lab_lut_shift;
+    int z = (cz - (tz << (lab_base_shift - lab_lut_shift))) << lab_lut_shift;
 
     int nTetra = -1;
     if(x > y)
@@ -5945,59 +6014,60 @@ static inline void tetraInterpolate(float cx, float cy, float cz, float* LUT,
         else nTetra = 2;
     }
 
-#define SETPT(_a, _b, _c, _x, _y, _z) \
+#define SETPT(n, _x, _y, _z) \
     do\
-    {\
-        (_a) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z))];\
-        (_b) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 1];\
-        (_c) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 2];\
-    }\
+        if(w##n)\
+        {\
+            (a##n) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z))];\
+            (b##n) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 1];\
+            (c##n) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 2];\
+        }\
     while(0)
 
-    float w0, w1, w2, w3;
-    float a0, a1, a2, a3, b0, b1, b2, b3, c0, c1, c2, c3;
-    SETPT(a0, b0, c0, 0, 0, 0);
-    SETPT(a3, b3, c3, 1, 1, 1);
+    int w0, w1, w2, w3;
+    int a0, a1, a2, a3, b0, b1, b2, b3, c0, c1, c2, c3;
     switch(nTetra)
     {
     case 0:
-        w0 = 1 - x; w1 = x - y; w2 = y - z; w3 = z;
-        SETPT(a1, b1, c1, 1, 0, 0);
-        SETPT(a2, b2, c2, 1, 1, 0);
+        w0 = LAB_BASE - x; w1 = x - y; w2 = y - z; w3 = z;
+        SETPT(1, 1, 0, 0);
+        SETPT(2, 1, 1, 0);
         break;
     case 1:
-        w0 = 1 - y; w1 = y - x; w2 = x - z; w3 = z;
-        SETPT(a1, b1, c1, 0, 1, 0);
-        SETPT(a2, b2, c2, 1, 1, 0);
+        w0 = LAB_BASE - y; w1 = y - x; w2 = x - z; w3 = z;
+        SETPT(1, 0, 1, 0);
+        SETPT(2, 1, 1, 0);
         break;
     case 2:
-        w0 = 1 - z; w1 = z - y; w2 = y - x; w3 = x;
-        SETPT(a1, b1, c1, 0, 0, 1);
-        SETPT(a2, b2, c2, 0, 1, 1);
+        w0 = LAB_BASE - z; w1 = z - y; w2 = y - x; w3 = x;
+        SETPT(1, 0, 0, 1);
+        SETPT(2, 0, 1, 1);
         break;
     case 3:
-        w0 = 1 - y; w1 = y - z; w2 = z - x; w3 = x;
-        SETPT(a1, b1, c1, 0, 1, 0);
-        SETPT(a2, b2, c2, 0, 1, 1);
+        w0 = LAB_BASE - y; w1 = y - z; w2 = z - x; w3 = x;
+        SETPT(1, 0, 1, 0);
+        SETPT(2, 0, 1, 1);
         break;
     case 4:
-        w0 = 1 - z; w1 = z - x; w2 = x - y; w3 = y;
-        SETPT(a1, b1, c1, 0, 0, 1);
-        SETPT(a2, b2, c2, 1, 0, 1);
+        w0 = LAB_BASE - z; w1 = z - x; w2 = x - y; w3 = y;
+        SETPT(1, 0, 0, 1);
+        SETPT(2, 1, 0, 1);
         break;
     case 5:
-        w0 = 1 - x; w1 = x - z; w2 = z - y; w3 = y;
-        SETPT(a1, b1, c1, 1, 0, 0);
-        SETPT(a2, b2, c2, 1, 0, 1);
+        w0 = LAB_BASE - x; w1 = x - z; w2 = z - y; w3 = y;
+        SETPT(1, 1, 0, 0);
+        SETPT(2, 1, 0, 1);
         break;
     default: CV_Error(CV_StsInternal, "No tetrahedron found");
     }
+    SETPT(0, 0, 0, 0);
+    SETPT(3, 1, 1, 1);
 
 #undef SETPT
 
-    a = a0*w0 + a1*w1 + a2*w2 + a3*w3;
-    b = b0*w0 + b1*w1 + b2*w2 + b3*w3;
-    c = c0*w0 + c1*w1 + c2*w2 + c3*w3;
+    a = CV_DESCALE(a0*w0 + a1*w1 + a2*w2 + a3*w3, lab_base_shift);
+    b = CV_DESCALE(b0*w0 + b1*w1 + b2*w2 + b3*w3, lab_base_shift);
+    c = CV_DESCALE(c0*w0 + c1*w1 + c2*w2 + c3*w3, lab_base_shift);
 }
 
 
@@ -6069,19 +6139,18 @@ struct RGB2Lab_b
 };
 
 
-#define clip(value) \
-    value < 0.0f ? 0.0f : value > 1.0f ? 1.0f : value;
-
 struct RGB2Lab_f
 {
     typedef float channel_type;
 
-    RGB2Lab_f(int _srccn, int blueIdx, const float* _coeffs,
+    RGB2Lab_f(int _srccn, int _blueIdx, const float* _coeffs,
               const float* _whitept, bool _srgb)
-    : srccn(_srccn), srgb(_srgb)
+    : srccn(_srccn), srgb(_srgb), blueIdx(_blueIdx)
     {
         volatile int _3 = 3;
         initLabTabs();
+
+        useTetraInterpolation = (!_coeffs && !_whitept && srgb && enableTetraInterpolation);
 
         if (!_coeffs)
             _coeffs = sRGB2XYZ_D65;
@@ -6104,13 +6173,30 @@ struct RGB2Lab_f
 
     void operator()(const float* src, float* dst, int n) const
     {
-        int i, scn = srccn;
+        int i, scn = srccn, bIdx = blueIdx;
         float gscale = GammaTabScale;
         const float* gammaTab = srgb ? sRGBGammaTab : 0;
         float C0 = coeffs[0], C1 = coeffs[1], C2 = coeffs[2],
               C3 = coeffs[3], C4 = coeffs[4], C5 = coeffs[5],
               C6 = coeffs[6], C7 = coeffs[7], C8 = coeffs[8];
         n *= 3;
+
+        if(useTetraInterpolation)
+        {
+            for(i = 0; i < n; i += 3, src += scn)
+            {
+                float R = clip(src[bIdx^2]);
+                float G = clip(src[1]);
+                float B = clip(src[bIdx]);
+
+                int L, a, b;
+                tetraInterpolate(R*LAB_BASE, G*LAB_BASE, B*LAB_BASE, RGB2LabLUT, L, a, b);
+
+                dst[i] = L*100.0f/LAB_BASE;
+                dst[i + 1] = a*256.0f/LAB_BASE - 128.0f;
+                dst[i + 2] = b*256.0f/LAB_BASE - 128.0f;
+            }
+        }
 
         static const float _1_3 = 1.0f / 3.0f;
         static const float _a = 16.0f / 116.0f;
@@ -6147,17 +6233,21 @@ struct RGB2Lab_f
     int srccn;
     float coeffs[9];
     bool srgb;
+    bool useTetraInterpolation;
+    int blueIdx;
 };
 
 struct Lab2RGB_f
 {
     typedef float channel_type;
 
-    Lab2RGB_f( int _dstcn, int blueIdx, const float* _coeffs,
+    Lab2RGB_f( int _dstcn, int _blueIdx, const float* _coeffs,
               const float* _whitept, bool _srgb )
-    : dstcn(_dstcn), srgb(_srgb)
+    : dstcn(_dstcn), srgb(_srgb), blueIdx(_blueIdx)
     {
         initLabTabs();
+
+        useTetraInterpolation = (!_coeffs && !_whitept && srgb && enableTetraInterpolation);
 
         if(!_coeffs)
             _coeffs = XYZ2sRGB_D65;
@@ -6269,7 +6359,7 @@ struct Lab2RGB_f
 
     void operator()(const float* src, float* dst, int n) const
     {
-        int i = 0, dcn = dstcn;
+        int i = 0, dcn = dstcn, bIdx = blueIdx;
         const float* gammaTab = srgb ? sRGBInvGammaTab : 0;
         float gscale = GammaTabScale;
         float C0 = coeffs[0], C1 = coeffs[1], C2 = coeffs[2],
@@ -6286,25 +6376,12 @@ struct Lab2RGB_f
                 float ai = src[i + 1];
                 float bi = src[i + 2];
 
-                float x, y, z;
-                // sic! -127 <= a,b <= 127, that's why 254.0 and 127.0
-                tetraInterpolate(li/100.0f, (ai+127.0f)/254.0f, (bi+127.0f)/254.0f, Lab2XYZLUT, x, y, z);
+                int ro, go, bo;
 
-                float ro = C0 * x + C1 * y + C2 * z;
-                float go = C3 * x + C4 * y + C5 * z;
-                float bo = C6 * x + C7 * y + C8 * z;
-                ro = clip(ro);
-                go = clip(go);
-                bo = clip(bo);
+                tetraInterpolate(li/100.0f*LAB_BASE, (ai+128.0f)/256.0f*LAB_BASE, (bi+128.0f)/256.0f*LAB_BASE,
+                                 Lab2RGBLUT, ro, go, bo);
 
-                if (gammaTab)
-                {
-                    ro = splineInterpolate(ro * gscale, gammaTab, GAMMA_TAB_SIZE);
-                    go = splineInterpolate(go * gscale, gammaTab, GAMMA_TAB_SIZE);
-                    bo = splineInterpolate(bo * gscale, gammaTab, GAMMA_TAB_SIZE);
-                }
-
-                dst[0] = ro, dst[1] = go, dst[2] = bo;
+                dst[bIdx] = ro*1.0f/LAB_BASE, dst[1] = go*1.0f/LAB_BASE, dst[bIdx^2] = bo*1.0f/LAB_BASE;
                 if( dcn == 4 )
                     dst[3] = alpha;
             }
@@ -6428,6 +6505,8 @@ struct Lab2RGB_f
     #if CV_SSE2
     bool haveSIMD;
     #endif
+    int blueIdx;
+    bool useTetraInterpolation;
 };
 
 #undef clip
