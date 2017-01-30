@@ -5815,6 +5815,16 @@ static int RGB2LabLUT[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3];
 #define clip(value) \
     value < 0.0f ? 0.0f : value > 1.0f ? 1.0f : value;
 
+static inline float applyGamma(float x)
+{
+    return x <= 0.04045f ? x*(1.f/12.92f) : (float)std::pow((double)(x + 0.055)*(1./1.055), 2.4);
+}
+
+static inline float applyInvGamma(float x)
+{
+    return x <= 0.0031308 ? x*12.92f : (float)(1.055*std::pow((double)x, 1./2.4) - 0.055);
+}
+
 static void initLabTabs()
 {
     static bool initialized = false;
@@ -5833,8 +5843,8 @@ static void initLabTabs()
         for(i = 0; i <= GAMMA_TAB_SIZE; i++)
         {
             float x = i*scale;
-            g[i] = x <= 0.04045f ? x*(1.f/12.92f) : (float)std::pow((double)(x + 0.055)*(1./1.055), 2.4);
-            ig[i] = x <= 0.0031308 ? x*12.92f : (float)(1.055*std::pow((double)x, 1./2.4) - 0.055);
+            g[i] = applyGamma(x);
+            ig[i] = applyInvGamma(x);
         }
         splineBuild(g, GAMMA_TAB_SIZE, sRGBGammaTab);
         splineBuild(ig, GAMMA_TAB_SIZE, sRGBInvGammaTab);
@@ -5851,7 +5861,6 @@ static void initLabTabs()
             float x = i*(1.f/(255.f*(1 << gamma_shift)));
             LabCbrtTab_b[i] = saturate_cast<ushort>((1 << lab_shift2)*(x < 0.008856f ? x*7.787f + 0.13793103448275862f : cvCbrt(x)));
         }
-        initialized = true;
 
         if(enableTetraInterpolation)
         {
@@ -5859,9 +5868,6 @@ static void initLabTabs()
             static const float fThresh = 7.787f * 0.008856f + 16.0f / 116.0f;
             static const float _1_3 = 1.0f / 3.0f;
             static const float _a = 16.0f / 116.0f;
-
-            const float* gammaTab = sRGBInvGammaTab;
-            float gscale = GammaTabScale;
 
             const float* _whitept = D65;
             float coeffs[9];
@@ -5935,10 +5941,9 @@ static void initLabTabs()
                         go = clip(go);
                         bo = clip(bo);
 
-                        //TODO: replace by true calculation
-                        ro = splineInterpolate(ro * gscale, gammaTab, GAMMA_TAB_SIZE);
-                        go = splineInterpolate(go * gscale, gammaTab, GAMMA_TAB_SIZE);
-                        bo = splineInterpolate(bo * gscale, gammaTab, GAMMA_TAB_SIZE);
+                        ro = applyInvGamma(ro);
+                        go = applyInvGamma(go);
+                        bo = applyInvGamma(bo);
 
                         Lab2RGBLUT[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r]     = cvRound(LAB_BASE*ro);
                         Lab2RGBLUT[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 1] = cvRound(LAB_BASE*go);
@@ -5949,10 +5954,9 @@ static void initLabTabs()
                         float G = 1.0*q/LAB_LUT_DIM;
                         float B = 1.0*r/LAB_LUT_DIM;
 
-                        //TODO: replace by true calculation
-                        R = splineInterpolate(R * gscale, gammaTab, GAMMA_TAB_SIZE);
-                        G = splineInterpolate(G * gscale, gammaTab, GAMMA_TAB_SIZE);
-                        B = splineInterpolate(B * gscale, gammaTab, GAMMA_TAB_SIZE);
+                        R = applyGamma(R);
+                        G = applyGamma(G);
+                        B = applyGamma(B);
 
                         float X = R*D0 + G*D1 + B*D2;
                         float Y = R*D3 + G*D4 + B*D5;
@@ -5973,28 +5977,29 @@ static void initLabTabs()
                 }
             }
         }
+        initialized = true;
     }
 }
 
 
+/* The idea is taken from the article:
+ * Performing color space conversions with three-dimensional linear interpolation
+ * by James M. Kasson, Sigfredo I. Nm, Wil Plouffe, James L. Hafner
+ * Journal of Electronic Imaging 4(3), 226—250 (July 1995).
+ */
 static inline void tetraInterpolate(int cx, int cy, int cz, int* LUT,
                                     int& a, int& b, int& c)
 {
-    /* The idea is taken from the article:
-     * Performing color space conversions with three-dimensional linear interpolation
-     * by James M. Kasson, Sigfredo I. Nm, Wil Plouffe, James L. Hafner
-     * Journal of Electronic Imaging 4(3), 226—250 (July 1995).
-     */
-
-    CV_Assert(cx >= 0 && cy >= 0 && cz >= 0 && cx <= LAB_BASE && cy <= LAB_BASE && cz <= LAB_BASE);
-
-    //cx, cy, cz, x, y, z are [0; LAB_BASE)
+    cx = (cx >= 0) ? (cx <= LAB_BASE ? cx : LAB_BASE) : 0;
+    cy = (cy >= 0) ? (cy <= LAB_BASE ? cy : LAB_BASE) : 0;
+    cz = (cz >= 0) ? (cz <= LAB_BASE ? cz : LAB_BASE) : 0;
 
     //LUT idx of origin pt of cube
     int tx = cx >> (lab_base_shift - lab_lut_shift);
     int ty = cy >> (lab_base_shift - lab_lut_shift);
     int tz = cz >> (lab_base_shift - lab_lut_shift);
 
+    //x, y, z are [0; LAB_BASE)
     int x = (cx - (tx << (lab_base_shift - lab_lut_shift))) << lab_lut_shift;
     int y = (cy - (ty << (lab_base_shift - lab_lut_shift))) << lab_lut_shift;
     int z = (cz - (tz << (lab_base_shift - lab_lut_shift))) << lab_lut_shift;
@@ -6002,7 +6007,7 @@ static inline void tetraInterpolate(int cx, int cy, int cz, int* LUT,
     int nTetra = -1;
     if(x > y)
     {
-        if(y < z) nTetra = 0;
+        if(y > z) nTetra = 0;
         else if(x > z) nTetra = 5; else nTetra = 4;
     }
     else
@@ -6181,9 +6186,10 @@ struct RGB2Lab_f
               C6 = coeffs[6], C7 = coeffs[7], C8 = coeffs[8];
         n *= 3;
 
+        i = 0;
         if(useTetraInterpolation)
         {
-            for(i = 0; i < n; i += 3, src += scn)
+            for(; i < n; i += 3, src += scn)
             {
                 float R = clip(src[bIdx^2]);
                 float G = clip(src[1]);
@@ -6200,7 +6206,7 @@ struct RGB2Lab_f
 
         static const float _1_3 = 1.0f / 3.0f;
         static const float _a = 16.0f / 116.0f;
-        for (i = 0; i < n; i += 3, src += scn )
+        for (; i < n; i += 3, src += scn )
         {
             float R = clip(src[0]);
             float G = clip(src[1]);
