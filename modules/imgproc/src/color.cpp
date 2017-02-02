@@ -5804,8 +5804,8 @@ static ushort LabCbrtTab_b[LAB_CBRT_TAB_SIZE_B];
 static const bool enableTetraInterpolation = true;
 enum
 {
-    LAB_LUT_DIM = 64+1,
     lab_lut_shift = 6,
+    LAB_LUT_DIM = (1 << lab_lut_shift)+1,
     lab_base_shift = 14,
     LAB_BASE = (1 << lab_base_shift),
 };
@@ -5892,9 +5892,6 @@ static void initLabTabs()
                 coeffs[j + 2] = sRGB2XYZ_D65[j]     * scaleWhite[i];
                 coeffs[j + 1] = sRGB2XYZ_D65[j + 1] * scaleWhite[i];
                 coeffs[j + 0] = sRGB2XYZ_D65[j + 2] * scaleWhite[i];
-
-                CV_Assert( coeffs[j] >= 0 && coeffs[j + 1] >= 0 && coeffs[j + 2] >= 0 &&
-                           coeffs[j] + coeffs[j + 1] + coeffs[j + 2] < 1.5f*LabCbrtTabScale );
             }
 
             float D0 = coeffs[0], D1 = coeffs[1], D2 = coeffs[2],
@@ -5908,9 +5905,9 @@ static void initLabTabs()
                     for(int r = 0; r < LAB_LUT_DIM; r++)
                     {
                         //Lab 2 RGB LUTs building
-                        float li = 100.0*p/LAB_LUT_DIM;
-                        float ai = 256.0*q/LAB_LUT_DIM - 128.0;
-                        float bi = 256.0*r/LAB_LUT_DIM - 128.0;
+                        float li = 100.0*p/(LAB_LUT_DIM-1);
+                        float ai = 256.0*q/(LAB_LUT_DIM-1) - 128.0;
+                        float bi = 256.0*r/(LAB_LUT_DIM-1) - 128.0;
 
                         float y, fy;
                         if (li <= lThresh)
@@ -5950,9 +5947,9 @@ static void initLabTabs()
                         Lab2RGBLUT[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 2] = cvRound(LAB_BASE*bo);
 
                         //RGB 2 Lab LUT building
-                        float R = 1.0*p/LAB_LUT_DIM;
-                        float G = 1.0*q/LAB_LUT_DIM;
-                        float B = 1.0*r/LAB_LUT_DIM;
+                        float R = 1.0*p/(LAB_LUT_DIM-1);
+                        float G = 1.0*q/(LAB_LUT_DIM-1);
+                        float B = 1.0*r/(LAB_LUT_DIM-1);
 
                         R = applyGamma(R);
                         G = applyGamma(G);
@@ -6004,21 +6001,6 @@ static inline void tetraInterpolate(int cx, int cy, int cz, int* LUT,
     int y = (cy - (ty << (lab_base_shift - lab_lut_shift))) << lab_lut_shift;
     int z = (cz - (tz << (lab_base_shift - lab_lut_shift))) << lab_lut_shift;
 
-    int nTetra = -1;
-    if(x > y)
-    {
-        if(y > z) nTetra = 0;
-        else if(x > z) nTetra = 5; else nTetra = 4;
-    }
-    else
-    {
-        if(y > z)
-        {
-            if(x > z) nTetra = 1; else nTetra = 3;
-        }
-        else nTetra = 2;
-    }
-
 #define SETPT(n, _x, _y, _z) \
     do\
         if(w##n)\
@@ -6031,40 +6013,53 @@ static inline void tetraInterpolate(int cx, int cy, int cz, int* LUT,
 
     int w0, w1, w2, w3;
     int a0, a1, a2, a3, b0, b1, b2, b3, c0, c1, c2, c3;
-    switch(nTetra)
+
+    if(x > y)
     {
-    case 0:
-        w0 = LAB_BASE - x; w1 = x - y; w2 = y - z; w3 = z;
-        SETPT(1, 1, 0, 0);
-        SETPT(2, 1, 1, 0);
-        break;
-    case 1:
-        w0 = LAB_BASE - y; w1 = y - x; w2 = x - z; w3 = z;
-        SETPT(1, 0, 1, 0);
-        SETPT(2, 1, 1, 0);
-        break;
-    case 2:
-        w0 = LAB_BASE - z; w1 = z - y; w2 = y - x; w3 = x;
-        SETPT(1, 0, 0, 1);
-        SETPT(2, 0, 1, 1);
-        break;
-    case 3:
-        w0 = LAB_BASE - y; w1 = y - z; w2 = z - x; w3 = x;
-        SETPT(1, 0, 1, 0);
-        SETPT(2, 0, 1, 1);
-        break;
-    case 4:
-        w0 = LAB_BASE - z; w1 = z - x; w2 = x - y; w3 = y;
-        SETPT(1, 0, 0, 1);
-        SETPT(2, 1, 0, 1);
-        break;
-    case 5:
-        w0 = LAB_BASE - x; w1 = x - z; w2 = z - y; w3 = y;
-        SETPT(1, 1, 0, 0);
-        SETPT(2, 1, 0, 1);
-        break;
-    default: CV_Error(CV_StsInternal, "No tetrahedron found");
+        if(y > z)
+        {
+            w0 = LAB_BASE - x; w1 = x - y; w2 = y - z; w3 = z;
+            SETPT(1, 1, 0, 0);
+            SETPT(2, 1, 1, 0);
+        }
+        else if(x > z)
+        {
+            w0 = LAB_BASE - x; w1 = x - z; w2 = z - y; w3 = y;
+            SETPT(1, 1, 0, 0);
+            SETPT(2, 1, 0, 1);
+        }
+        else
+        {
+            w0 = LAB_BASE - z; w1 = z - x; w2 = x - y; w3 = y;
+            SETPT(1, 0, 0, 1);
+            SETPT(2, 1, 0, 1);
+        }
     }
+    else
+    {
+        if(y > z)
+        {
+            if(x > z)
+            {
+                w0 = LAB_BASE - y; w1 = y - x; w2 = x - z; w3 = z;
+                SETPT(1, 0, 1, 0);
+                SETPT(2, 1, 1, 0);
+            }
+            else
+            {
+                w0 = LAB_BASE - y; w1 = y - z; w2 = z - x; w3 = x;
+                SETPT(1, 0, 1, 0);
+                SETPT(2, 0, 1, 1);
+            }
+        }
+        else
+        {
+            w0 = LAB_BASE - z; w1 = z - y; w2 = y - x; w3 = x;
+            SETPT(1, 0, 0, 1);
+            SETPT(2, 0, 1, 1);
+        }
+    }
+
     SETPT(0, 0, 0, 0);
     SETPT(3, 1, 1, 1);
 
