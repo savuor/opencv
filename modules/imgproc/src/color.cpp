@@ -6071,6 +6071,46 @@ static inline void tetraInterpolate(int cx, int cy, int cz, int* LUT,
 }
 
 
+static inline void noInterpolate(int cx, int cy, int cz, int* LUT,
+                                 int& a, int& b, int& c)
+{
+    cx = (cx >= 0) ? (cx <= LAB_BASE ? cx : LAB_BASE) : 0;
+    cy = (cy >= 0) ? (cy <= LAB_BASE ? cy : LAB_BASE) : 0;
+    cz = (cz >= 0) ? (cz <= LAB_BASE ? cz : LAB_BASE) : 0;
+
+    //LUT idx of origin pt of cube
+    int tx = cx >> (lab_base_shift - lab_lut_shift);
+    int ty = cy >> (lab_base_shift - lab_lut_shift);
+    int tz = cz >> (lab_base_shift - lab_lut_shift);
+
+    //x, y, z are [0; LAB_BASE)
+    int x = (cx - (tx << (lab_base_shift - lab_lut_shift))) << lab_lut_shift;
+    int y = (cy - (ty << (lab_base_shift - lab_lut_shift))) << lab_lut_shift;
+    int z = (cz - (tz << (lab_base_shift - lab_lut_shift))) << lab_lut_shift;
+
+#define SETPT(n, _x, _y, _z) \
+    do\
+        if(w##n)\
+        {\
+            (a##n) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z))];\
+            (b##n) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 1];\
+            (c##n) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 2];\
+        }\
+    while(0)
+
+    int w0 = 1, w1, w2, w3;
+    int a0, a1, a2, a3, b0, b1, b2, b3, c0, c1, c2, c3;
+
+    SETPT(0, 0, 0, 0);
+
+#undef SETPT
+
+    a = a0;
+    b = b0;
+    c = c0;
+}
+
+
 struct RGB2Lab_b
 {
     typedef uchar channel_type;
@@ -6192,6 +6232,7 @@ struct RGB2Lab_f
 
                 int L, a, b;
                 tetraInterpolate(R*LAB_BASE, G*LAB_BASE, B*LAB_BASE, RGB2LabLUT, L, a, b);
+                //noInterpolate(R*LAB_BASE, G*LAB_BASE, B*LAB_BASE, RGB2LabLUT, L, a, b);
 
                 dst[i] = L*100.0f/LAB_BASE;
                 dst[i + 1] = a*256.0f/LAB_BASE - 128.0f;
@@ -6381,6 +6422,8 @@ struct Lab2RGB_f
 
                 tetraInterpolate(li/100.0f*LAB_BASE, (ai+128.0f)/256.0f*LAB_BASE, (bi+128.0f)/256.0f*LAB_BASE,
                                  Lab2RGBLUT, ro, go, bo);
+                //noInterpolate(li/100.0f*LAB_BASE, (ai+128.0f)/256.0f*LAB_BASE, (bi+128.0f)/256.0f*LAB_BASE,
+                //              Lab2RGBLUT, ro, go, bo);
 
                 dst[bIdx] = ro*1.0f/LAB_BASE, dst[1] = go*1.0f/LAB_BASE, dst[bIdx^2] = bo*1.0f/LAB_BASE;
                 if( dcn == 4 )

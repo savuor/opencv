@@ -41,6 +41,11 @@
 
 #include "test_precomp.hpp"
 
+//to be removed
+#include "opencv2/core.hpp"
+#include "opencv2/core/hal/interface.h"
+#include "opencv2/core/sse_utils.hpp"
+
 using namespace cv;
 using namespace std;
 
@@ -2214,4 +2219,1997 @@ TEST(ImgProc_BGR2RGBA, 3ch24ch)
     expected.setTo(Scalar(80, 0, 200, 255));
 
     EXPECT_DOUBLE_EQ(norm(expected - dst, NORM_INF), 0.);
+}
+
+
+//TODO: remove it later
+/////////////
+// computes cubic spline coefficients for a function: (xi=i, yi=f[i]), i=0..n
+template<typename _Tp> static void splineBuild(const _Tp* f, int n, _Tp* tab)
+{
+    _Tp cn = 0;
+    int i;
+    tab[0] = tab[1] = (_Tp)0;
+
+    for(i = 1; i < n-1; i++)
+    {
+        _Tp t = 3*(f[i+1] - 2*f[i] + f[i-1]);
+        _Tp l = 1/(4 - tab[(i-1)*4]);
+        tab[i*4] = l; tab[i*4+1] = (t - tab[(i-1)*4+1])*l;
+    }
+
+    for(i = n-1; i >= 0; i--)
+    {
+        _Tp c = tab[i*4+1] - tab[i*4]*cn;
+        _Tp b = f[i+1] - f[i] - (cn + c*2)*(_Tp)0.3333333333333333;
+        _Tp d = (cn - c)*(_Tp)0.3333333333333333;
+        tab[i*4] = f[i]; tab[i*4+1] = b;
+        tab[i*4+2] = c; tab[i*4+3] = d;
+        cn = c;
+    }
+}
+
+// interpolates value of a function at x, 0 <= x <= n using a cubic spline.
+template<typename _Tp> static inline _Tp splineInterpolate(_Tp x, const _Tp* tab, int n)
+{
+    // don't touch this function without urgent need - some versions of gcc fail to inline it correctly
+    int ix = std::min(std::max(int(x), 0), n-1);
+    x -= ix;
+    tab += ix*4;
+    return ((tab[3]*x + tab[2])*x + tab[1])*x + tab[0];
+}
+
+#if CV_NEON
+template<typename _Tp> static inline void splineInterpolate(float32x4_t& v_x, const _Tp* tab, int n)
+{
+    int32x4_t v_ix = vcvtq_s32_f32(vminq_f32(vmaxq_f32(v_x, vdupq_n_f32(0)), vdupq_n_f32(n - 1)));
+    v_x = vsubq_f32(v_x, vcvtq_f32_s32(v_ix));
+    v_ix = vshlq_n_s32(v_ix, 2);
+
+    int CV_DECL_ALIGNED(16) ix[4];
+    vst1q_s32(ix, v_ix);
+
+    float32x4_t v_tab0 = vld1q_f32(tab + ix[0]);
+    float32x4_t v_tab1 = vld1q_f32(tab + ix[1]);
+    float32x4_t v_tab2 = vld1q_f32(tab + ix[2]);
+    float32x4_t v_tab3 = vld1q_f32(tab + ix[3]);
+
+    float32x4x2_t v01 = vtrnq_f32(v_tab0, v_tab1);
+    float32x4x2_t v23 = vtrnq_f32(v_tab2, v_tab3);
+
+    v_tab0 = vcombine_f32(vget_low_f32(v01.val[0]), vget_low_f32(v23.val[0]));
+    v_tab1 = vcombine_f32(vget_low_f32(v01.val[1]), vget_low_f32(v23.val[1]));
+    v_tab2 = vcombine_f32(vget_high_f32(v01.val[0]), vget_high_f32(v23.val[0]));
+    v_tab3 = vcombine_f32(vget_high_f32(v01.val[1]), vget_high_f32(v23.val[1]));
+
+    v_x = vmlaq_f32(v_tab0, vmlaq_f32(v_tab1, vmlaq_f32(v_tab2, v_tab3, v_x), v_x), v_x);
+}
+#elif CV_SSE2
+template<typename _Tp> static inline void splineInterpolate(__m128& v_x, const _Tp* tab, int n)
+{
+    __m128i v_ix = _mm_cvttps_epi32(_mm_min_ps(_mm_max_ps(v_x, _mm_setzero_ps()), _mm_set1_ps(float(n - 1))));
+    v_x = _mm_sub_ps(v_x, _mm_cvtepi32_ps(v_ix));
+    v_ix = _mm_slli_epi32(v_ix, 2);
+
+    int CV_DECL_ALIGNED(16) ix[4];
+    _mm_store_si128((__m128i *)ix, v_ix);
+
+    __m128 v_tab0 = _mm_loadu_ps(tab + ix[0]);
+    __m128 v_tab1 = _mm_loadu_ps(tab + ix[1]);
+    __m128 v_tab2 = _mm_loadu_ps(tab + ix[2]);
+    __m128 v_tab3 = _mm_loadu_ps(tab + ix[3]);
+
+    __m128 v_tmp0 = _mm_unpacklo_ps(v_tab0, v_tab1);
+    __m128 v_tmp1 = _mm_unpacklo_ps(v_tab2, v_tab3);
+    __m128 v_tmp2 = _mm_unpackhi_ps(v_tab0, v_tab1);
+    __m128 v_tmp3 = _mm_unpackhi_ps(v_tab2, v_tab3);
+
+    v_tab0 = _mm_shuffle_ps(v_tmp0, v_tmp1, 0x44);
+    v_tab2 = _mm_shuffle_ps(v_tmp2, v_tmp3, 0x44);
+    v_tab1 = _mm_shuffle_ps(v_tmp0, v_tmp1, 0xee);
+    v_tab3 = _mm_shuffle_ps(v_tmp2, v_tmp3, 0xee);
+
+    __m128 v_l = _mm_mul_ps(v_x, v_tab3);
+    v_l = _mm_add_ps(v_l, v_tab2);
+    v_l = _mm_mul_ps(v_l, v_x);
+    v_l = _mm_add_ps(v_l, v_tab1);
+    v_l = _mm_mul_ps(v_l, v_x);
+    v_x = _mm_add_ps(v_l, v_tab0);
+}
+#endif
+
+template<typename _Tp> struct ColorChannel
+{
+    typedef float worktype_f;
+    static _Tp max() { return std::numeric_limits<_Tp>::max(); }
+    static _Tp half() { return (_Tp)(max()/2 + 1); }
+};
+
+template<> struct ColorChannel<float>
+{
+    typedef float worktype_f;
+    static float max() { return 1.f; }
+    static float half() { return 0.5f; }
+};
+
+///////////
+
+static const float sRGB2XYZ_D65[] =
+{
+    0.412453f, 0.357580f, 0.180423f,
+    0.212671f, 0.715160f, 0.072169f,
+    0.019334f, 0.119193f, 0.950227f
+};
+
+static const float XYZ2sRGB_D65[] =
+{
+    3.240479f, -1.53715f, -0.498535f,
+    -0.969256f, 1.875991f, 0.041556f,
+    0.055648f, -0.204043f, 1.057311f
+};
+
+enum
+{
+    yuv_shift = 14,
+    xyz_shift = 12,
+    R2Y = 4899, // == R2YF*16384
+    G2Y = 9617, // == G2YF*16384
+    B2Y = 1868, // == B2YF*16384
+    BLOCK_SIZE = 256
+};
+
+#define  CV_DESCALE(x,n)     (((x) + (1 << ((n)-1))) >> (n))
+
+
+///////////////////////////////////// RGB <-> L*a*b* /////////////////////////////////////
+
+static const float D65[] = { 0.950456f, 1.f, 1.088754f };
+
+enum { LAB_CBRT_TAB_SIZE = 1024, GAMMA_TAB_SIZE = 1024 };
+static float LabCbrtTab[LAB_CBRT_TAB_SIZE*4];
+static const float LabCbrtTabScale = LAB_CBRT_TAB_SIZE/1.5f;
+
+static float sRGBGammaTab[GAMMA_TAB_SIZE*4], sRGBInvGammaTab[GAMMA_TAB_SIZE*4];
+static const float GammaTabScale = (float)GAMMA_TAB_SIZE;
+
+static ushort sRGBGammaTab_b[256], linearGammaTab_b[256];
+#undef lab_shift
+#define lab_shift xyz_shift
+#define gamma_shift 3
+#define lab_shift2 (lab_shift + gamma_shift)
+#define LAB_CBRT_TAB_SIZE_B (256*3/2*(1<<gamma_shift))
+static ushort LabCbrtTab_b[LAB_CBRT_TAB_SIZE_B];
+
+static bool enableTetraInterpolation = true;
+enum
+{
+    lab_lut_shift = 6,
+    LAB_LUT_DIM = (1 << lab_lut_shift)+1,
+    lab_base_shift = 14,
+    LAB_BASE = (1 << lab_base_shift),
+};
+enum Cvt_Type
+{
+    RGB_TO_LAB, LAB_TO_RGB
+};
+static int Lab2RGBLUT_i32[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3];
+static int RGB2LabLUT_i32[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3];
+static int Lab2XYZLUT_i32[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3];
+static int XYZ2LabLUT_i32[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3];
+static float Lab2RGBLUT_f[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3];
+static float RGB2LabLUT_f[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3];
+static float Lab2XYZLUT_f[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3];
+static float XYZ2LabLUT_f[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3];
+
+#define clip(value) \
+    value < 0.0f ? 0.0f : value > 1.0f ? 1.0f : value;
+
+static inline float applyGamma(float x)
+{
+    return x <= 0.04045f ? x*(1.f/12.92f) : (float)std::pow((double)(x + 0.055)*(1./1.055), 2.4);
+}
+
+static inline float applyInvGamma(float x)
+{
+    return x <= 0.0031308 ? x*12.92f : (float)(1.055*std::pow((double)x, 1./2.4) - 0.055);
+}
+
+static void initLabTabs()
+{
+    static bool initialized = false;
+    if(!initialized)
+    {
+        float f[LAB_CBRT_TAB_SIZE+1], g[GAMMA_TAB_SIZE+1], ig[GAMMA_TAB_SIZE+1], scale = 1.f/LabCbrtTabScale;
+        int i;
+        for(i = 0; i <= LAB_CBRT_TAB_SIZE; i++)
+        {
+            float x = i*scale;
+            f[i] = x < 0.008856f ? x*7.787f + 0.13793103448275862f : cvCbrt(x);
+        }
+        splineBuild(f, LAB_CBRT_TAB_SIZE, LabCbrtTab);
+
+        scale = 1.f/GammaTabScale;
+        for(i = 0; i <= GAMMA_TAB_SIZE; i++)
+        {
+            float x = i*scale;
+            g[i] = applyGamma(x);
+            ig[i] = applyInvGamma(x);
+        }
+        splineBuild(g, GAMMA_TAB_SIZE, sRGBGammaTab);
+        splineBuild(ig, GAMMA_TAB_SIZE, sRGBInvGammaTab);
+
+        for(i = 0; i < 256; i++)
+        {
+            float x = i*(1.f/255.f);
+            sRGBGammaTab_b[i] = saturate_cast<ushort>(255.f*(1 << gamma_shift)*(x <= 0.04045f ? x*(1.f/12.92f) : (float)std::pow((double)(x + 0.055)*(1./1.055), 2.4)));
+            linearGammaTab_b[i] = (ushort)(i*(1 << gamma_shift));
+        }
+
+        for(i = 0; i < LAB_CBRT_TAB_SIZE_B; i++)
+        {
+            float x = i*(1.f/(255.f*(1 << gamma_shift)));
+            LabCbrtTab_b[i] = saturate_cast<ushort>((1 << lab_shift2)*(x < 0.008856f ? x*7.787f + 0.13793103448275862f : cvCbrt(x)));
+        }
+
+        if(enableTetraInterpolation)
+        {
+            static const float lThresh = 0.008856f * 903.3f;
+            static const float fThresh = 7.787f * 0.008856f + 16.0f / 116.0f;
+            static const float _1_3 = 1.0f / 3.0f;
+            static const float _a = 16.0f / 116.0f;
+
+            const float* _whitept = D65;
+            float coeffs[9];
+
+            //Lab2RGB coeffs
+            for(i = 0; i < 3; i++ )
+            {
+                coeffs[i+2*3] = XYZ2sRGB_D65[i]*_whitept[i];
+                coeffs[i+1*3] = XYZ2sRGB_D65[i+3]*_whitept[i];
+                coeffs[i+0*3] = XYZ2sRGB_D65[i+6]*_whitept[i];
+            }
+            float C0 = coeffs[0], C1 = coeffs[1], C2 = coeffs[2],
+                  C3 = coeffs[3], C4 = coeffs[4], C5 = coeffs[5],
+                  C6 = coeffs[6], C7 = coeffs[7], C8 = coeffs[8];
+
+            //RGB2Lab coeffs
+            float scaleWhite[] = { 1.0f / _whitept[0], 1.0f, 1.0f / _whitept[2] };
+
+            for(i = 0; i < 3; i++ )
+            {
+                int j = i * 3;
+                coeffs[j + 2] = sRGB2XYZ_D65[j]     * scaleWhite[i];
+                coeffs[j + 1] = sRGB2XYZ_D65[j + 1] * scaleWhite[i];
+                coeffs[j + 0] = sRGB2XYZ_D65[j + 2] * scaleWhite[i];
+            }
+
+            float D0 = coeffs[0], D1 = coeffs[1], D2 = coeffs[2],
+                  D3 = coeffs[3], D4 = coeffs[4], D5 = coeffs[5],
+                  D6 = coeffs[6], D7 = coeffs[7], D8 = coeffs[8];
+
+            for(int p = 0; p < LAB_LUT_DIM; p++)
+            {
+                for(int q = 0; q < LAB_LUT_DIM; q++)
+                {
+                    for(int r = 0; r < LAB_LUT_DIM; r++)
+                    {
+                        //Lab 2 RGB LUTs building
+                        float li = 100.0*p/(LAB_LUT_DIM-1);
+                        float ai = 256.0*q/(LAB_LUT_DIM-1) - 128.0;
+                        float bi = 256.0*r/(LAB_LUT_DIM-1) - 128.0;
+
+                        float y, fy;
+                        if (li <= lThresh)
+                        {
+                            y = li / 903.3f;
+                            fy = 7.787f * y + 16.0f / 116.0f;
+                        }
+                        else
+                        {
+                            fy = (li + 16.0f) / 116.0f;
+                            y = fy * fy * fy;
+                        }
+
+                        float fxz[] = { ai / 500.0f + fy, fy - bi / 200.0f };
+
+                        for (int j = 0; j < 2; j++)
+                            if (fxz[j] <= fThresh)
+                                fxz[j] = (fxz[j] - 16.0f / 116.0f) / 7.787f;
+                            else
+                                fxz[j] = fxz[j] * fxz[j] * fxz[j];
+
+                        float x = fxz[0], z = fxz[1];
+
+                        Lab2XYZLUT_i32[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r]     = cvRound(LAB_BASE*x);
+                        Lab2XYZLUT_i32[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 1] = cvRound(LAB_BASE*y);
+                        Lab2XYZLUT_i32[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 2] = cvRound(LAB_BASE*z);
+                        Lab2XYZLUT_f[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r]     = x;
+                        Lab2XYZLUT_f[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 1] = y;
+                        Lab2XYZLUT_f[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 2] = z;
+
+                        float ro = C0 * x + C1 * y + C2 * z;
+                        float go = C3 * x + C4 * y + C5 * z;
+                        float bo = C6 * x + C7 * y + C8 * z;
+                        ro = clip(ro);
+                        go = clip(go);
+                        bo = clip(bo);
+
+                        ro = applyInvGamma(ro);
+                        go = applyInvGamma(go);
+                        bo = applyInvGamma(bo);
+
+                        Lab2RGBLUT_i32[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r]     = cvRound(LAB_BASE*ro);
+                        Lab2RGBLUT_i32[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 1] = cvRound(LAB_BASE*go);
+                        Lab2RGBLUT_i32[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 2] = cvRound(LAB_BASE*bo);
+                        Lab2RGBLUT_f[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r]     = ro;
+                        Lab2RGBLUT_f[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 1] = go;
+                        Lab2RGBLUT_f[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 2] = bo;
+
+                        //RGB 2 Lab LUT building
+                        float R = 1.0*p/(LAB_LUT_DIM-1);
+                        float G = 1.0*q/(LAB_LUT_DIM-1);
+                        float B = 1.0*r/(LAB_LUT_DIM-1);
+
+                        R = applyGamma(R);
+                        G = applyGamma(G);
+                        B = applyGamma(B);
+
+                        float X = R*D0 + G*D1 + B*D2;
+                        float Y = R*D3 + G*D4 + B*D5;
+                        float Z = R*D6 + G*D7 + B*D8;
+
+                        float FX = X > 0.008856f ? std::pow(X, _1_3) : (7.787f * X + _a);
+                        float FY = Y > 0.008856f ? std::pow(Y, _1_3) : (7.787f * Y + _a);
+                        float FZ = Z > 0.008856f ? std::pow(Z, _1_3) : (7.787f * Z + _a);
+
+                        float L = Y > 0.008856f ? (116.f * FY - 16.f) : (903.3f * Y);
+                        float a = 500.f * (FX - FY);
+                        float b = 200.f * (FY - FZ);
+
+                        RGB2LabLUT_i32[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r]     = cvRound(LAB_BASE*L/100.0f);
+                        RGB2LabLUT_i32[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 1] = cvRound(LAB_BASE*(a+128.0f)/256.0f);
+                        RGB2LabLUT_i32[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 2] = cvRound(LAB_BASE*(b+128.0f)/256.0f);
+                        RGB2LabLUT_f[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r]     = L/100.0f;
+                        RGB2LabLUT_f[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 1] = (a+128.0f)/256.0f;
+                        RGB2LabLUT_f[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 2] = (b+128.0f)/256.0f;
+
+                        float xi = 1.0f*p/(LAB_LUT_DIM-1);
+                        float yi = 1.0f*q/(LAB_LUT_DIM-1);
+                        float zi = 1.0f*r/(LAB_LUT_DIM-1);
+
+                        float iFX = xi > 0.008856f ? std::pow(xi, _1_3) : (7.787f * xi + _a);
+                        float iFY = yi > 0.008856f ? std::pow(yi, _1_3) : (7.787f * yi + _a);
+                        float iFZ = zi > 0.008856f ? std::pow(zi, _1_3) : (7.787f * zi + _a);
+
+                        float iL = yi > 0.008856f ? (116.f * iFY - 16.f) : (903.3f * yi);
+                        float ia = 500.f * (iFX - iFY);
+                        float ib = 200.f * (iFY - iFZ);
+
+                        XYZ2LabLUT_i32[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r]     = cvRound(LAB_BASE*iL/100.0f);
+                        XYZ2LabLUT_i32[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 1] = cvRound(LAB_BASE*(ia+128.0f)/256.0f);
+                        XYZ2LabLUT_i32[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 2] = cvRound(LAB_BASE*(ib+128.0f)/256.0f);
+                        XYZ2LabLUT_f[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r]     = iL/100.0f;
+                        XYZ2LabLUT_f[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 1] = (ia+128.0f)/256.0f;
+                        XYZ2LabLUT_f[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 2] = (ib+128.0f)/256.0f;
+                    }
+                }
+            }
+        }
+
+        initialized = true;
+    }
+}
+
+
+/* The idea is taken from the article:
+ * Performing color space conversions with three-dimensional linear interpolation
+ * by James M. Kasson, Sigfredo I. Nm, Wil Plouffe, James L. Hafner
+ * Journal of Electronic Imaging 4(3), 226—250 (July 1995).
+ */
+static inline void tetraInterpolate(int cx, int cy, int cz, int* LUT,
+                                    int& a, int& b, int& c)
+{
+    cx = (cx >= 0) ? (cx <= LAB_BASE ? cx : LAB_BASE) : 0;
+    cy = (cy >= 0) ? (cy <= LAB_BASE ? cy : LAB_BASE) : 0;
+    cz = (cz >= 0) ? (cz <= LAB_BASE ? cz : LAB_BASE) : 0;
+
+    //LUT idx of origin pt of cube
+    int tx = cx >> (lab_base_shift - lab_lut_shift);
+    int ty = cy >> (lab_base_shift - lab_lut_shift);
+    int tz = cz >> (lab_base_shift - lab_lut_shift);
+
+    //x, y, z are [0; LAB_BASE)
+    int x = (cx - (tx << (lab_base_shift - lab_lut_shift))) << lab_lut_shift;
+    int y = (cy - (ty << (lab_base_shift - lab_lut_shift))) << lab_lut_shift;
+    int z = (cz - (tz << (lab_base_shift - lab_lut_shift))) << lab_lut_shift;
+
+#define SETPT(n, _x, _y, _z) \
+    do\
+        if(w##n)\
+        {\
+            (a##n) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z))];\
+            (b##n) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 1];\
+            (c##n) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 2];\
+        }\
+        else\
+        {\
+            (a##n) = (b##n) = (c##n) = 0;\
+        }\
+    while(0)
+
+    int w0, w1, w2, w3;
+    int a0, a1, a2, a3, b0, b1, b2, b3, c0, c1, c2, c3;
+
+    if(x > y)
+    {
+        if(y > z)
+        {
+            w0 = LAB_BASE - x; w1 = x - y; w2 = y - z; w3 = z;
+            SETPT(1, 1, 0, 0);
+            SETPT(2, 1, 1, 0);
+        }
+        else if(x > z)
+        {
+            w0 = LAB_BASE - x; w1 = x - z; w2 = z - y; w3 = y;
+            SETPT(1, 1, 0, 0);
+            SETPT(2, 1, 0, 1);
+        }
+        else
+        {
+            w0 = LAB_BASE - z; w1 = z - x; w2 = x - y; w3 = y;
+            SETPT(1, 0, 0, 1);
+            SETPT(2, 1, 0, 1);
+        }
+    }
+    else
+    {
+        if(y > z)
+        {
+            if(x > z)
+            {
+                w0 = LAB_BASE - y; w1 = y - x; w2 = x - z; w3 = z;
+                SETPT(1, 0, 1, 0);
+                SETPT(2, 1, 1, 0);
+            }
+            else
+            {
+                w0 = LAB_BASE - y; w1 = y - z; w2 = z - x; w3 = x;
+                SETPT(1, 0, 1, 0);
+                SETPT(2, 0, 1, 1);
+            }
+        }
+        else
+        {
+            w0 = LAB_BASE - z; w1 = z - y; w2 = y - x; w3 = x;
+            SETPT(1, 0, 0, 1);
+            SETPT(2, 0, 1, 1);
+        }
+    }
+
+    SETPT(0, 0, 0, 0);
+    SETPT(3, 1, 1, 1);
+
+#undef SETPT
+
+    a = CV_DESCALE(a0*w0 + a1*w1 + a2*w2 + a3*w3, lab_base_shift);
+    b = CV_DESCALE(b0*w0 + b1*w1 + b2*w2 + b3*w3, lab_base_shift);
+    c = CV_DESCALE(c0*w0 + c1*w1 + c2*w2 + c3*w3, lab_base_shift);
+}
+
+
+static inline void tetraFloatInterpolate(float cx, float cy, float cz, float* LUT,
+                                         float& a, float& b, float& c)
+{
+    cx = (cx >= 0) ? (cx <= 1.0f ? cx : 1.0f) : 0;
+    cy = (cy >= 0) ? (cy <= 1.0f ? cy : 1.0f) : 0;
+    cz = (cz >= 0) ? (cz <= 1.0f ? cz : 1.0f) : 0;
+
+    //LUT idx of origin pt of cube
+    int tx = cvFloor(cx*(LAB_LUT_DIM-1));
+    int ty = cvFloor(cy*(LAB_LUT_DIM-1));
+    int tz = cvFloor(cz*(LAB_LUT_DIM-1));
+
+    //x, y, z are [0; 1)
+    float x = cx*(LAB_LUT_DIM-1) - tx;
+    float y = cy*(LAB_LUT_DIM-1) - ty;
+    float z = cz*(LAB_LUT_DIM-1) - tz;
+
+#define SETPT(n, _x, _y, _z) \
+    do\
+        if(abs(w##n) > FLT_EPSILON)\
+        {\
+            a##n = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z))];\
+            b##n = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 1];\
+            c##n = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 2];\
+        }\
+        else\
+        {\
+            a##n = b##n = c##n = 0;\
+        }\
+    while(0)
+
+    float w0, w1, w2, w3;
+    float a0, a1, a2, a3, b0, b1, b2, b3, c0, c1, c2, c3;
+
+    if(x > y)
+    {
+        if(y > z)
+        {
+            w0 = 1.0f - x; w1 = x - y; w2 = y - z; w3 = z;
+            SETPT(1, 1, 0, 0);
+            SETPT(2, 1, 1, 0);
+        }
+        else if(x > z)
+        {
+            w0 = 1.0f - x; w1 = x - z; w2 = z - y; w3 = y;
+            SETPT(1, 1, 0, 0);
+            SETPT(2, 1, 0, 1);
+        }
+        else
+        {
+            w0 = 1.0f - z; w1 = z - x; w2 = x - y; w3 = y;
+            SETPT(1, 0, 0, 1);
+            SETPT(2, 1, 0, 1);
+        }
+    }
+    else
+    {
+        if(y > z)
+        {
+            if(x > z)
+            {
+                w0 = 1.0f - y; w1 = y - x; w2 = x - z; w3 = z;
+                SETPT(1, 0, 1, 0);
+                SETPT(2, 1, 1, 0);
+            }
+            else
+            {
+                w0 = 1.0f - y; w1 = y - z; w2 = z - x; w3 = x;
+                SETPT(1, 0, 1, 0);
+                SETPT(2, 0, 1, 1);
+            }
+        }
+        else
+        {
+            w0 = 1.0f - z; w1 = z - y; w2 = y - x; w3 = x;
+            SETPT(1, 0, 0, 1);
+            SETPT(2, 0, 1, 1);
+        }
+    }
+
+    SETPT(0, 0, 0, 0);
+    SETPT(3, 1, 1, 1);
+
+#undef SETPT
+
+    a = a0*w0 + a1*w1 + a2*w2 + a3*w3;
+    b = b0*w0 + b1*w1 + b2*w2 + b3*w3;
+    c = c0*w0 + c1*w1 + c2*w2 + c3*w3;
+}
+
+
+static inline void noInterpolate(int cx, int cy, int cz, int* LUT,
+                                 int& a, int& b, int& c)
+{
+    cx = (cx >= 0) ? (cx <= LAB_BASE ? cx : LAB_BASE) : 0;
+    cy = (cy >= 0) ? (cy <= LAB_BASE ? cy : LAB_BASE) : 0;
+    cz = (cz >= 0) ? (cz <= LAB_BASE ? cz : LAB_BASE) : 0;
+
+    //LUT idx of origin pt of cube
+    int tx = cx >> (lab_base_shift - lab_lut_shift);
+    int ty = cy >> (lab_base_shift - lab_lut_shift);
+    int tz = cz >> (lab_base_shift - lab_lut_shift);
+
+    //x, y, z are [0; LAB_BASE)
+    int x = (cx - (tx << (lab_base_shift - lab_lut_shift))) << lab_lut_shift;
+    int y = (cy - (ty << (lab_base_shift - lab_lut_shift))) << lab_lut_shift;
+    int z = (cz - (tz << (lab_base_shift - lab_lut_shift))) << lab_lut_shift;
+
+#define SETPT(n, _x, _y, _z) \
+    do\
+        if(w##n)\
+        {\
+            (a##n) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z))];\
+            (b##n) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 1];\
+            (c##n) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 2];\
+        }\
+        else\
+        {\
+            (a##n) = (b##n) = (c##n) = 0;\
+        }\
+    while(0)
+
+    int w0 = 1, w1, w2, w3;
+    int a0, a1, a2, a3, b0, b1, b2, b3, c0, c1, c2, c3;
+
+    SETPT(0, 0, 0, 0);
+
+#undef SETPT
+
+    a = a0;
+    b = b0;
+    c = c0;
+}
+
+
+enum
+{
+    trilinear_shift = 4,
+    TRILINEAR_BASE = (1 << trilinear_shift)
+};
+
+static inline void trilinearInterpolate(int cx, int cy, int cz, int* LUT,
+                                        int& a, int& b, int& c)
+{
+    cx = (cx >= 0) ? (cx <= LAB_BASE ? cx : LAB_BASE) : 0;
+    cy = (cy >= 0) ? (cy <= LAB_BASE ? cy : LAB_BASE) : 0;
+    cz = (cz >= 0) ? (cz <= LAB_BASE ? cz : LAB_BASE) : 0;
+
+    //LUT idx of origin pt of cube
+    int tx = cx >> (lab_base_shift - lab_lut_shift);
+    int ty = cy >> (lab_base_shift - lab_lut_shift);
+    int tz = cz >> (lab_base_shift - lab_lut_shift);
+
+    //x, y, z are [0; TRILINEAR_BASE)
+    int x = (cx - (tx << (lab_base_shift - lab_lut_shift)));
+    int y = (cy - (ty << (lab_base_shift - lab_lut_shift)));
+    int z = (cz - (tz << (lab_base_shift - lab_lut_shift)));
+    if(lab_base_shift - lab_lut_shift > trilinear_shift)
+    {
+        x = x >> (lab_base_shift - lab_lut_shift - trilinear_shift);
+        y = y >> (lab_base_shift - lab_lut_shift - trilinear_shift);
+        z = z >> (lab_base_shift - lab_lut_shift - trilinear_shift);
+    }
+    else
+    {
+        x = x << (trilinear_shift - (lab_base_shift - lab_lut_shift));
+        y = y << (trilinear_shift - (lab_base_shift - lab_lut_shift));
+        z = z << (trilinear_shift - (lab_base_shift - lab_lut_shift));
+    }
+
+    int w[8];
+    int aa[8], bb[8], cc[8];
+
+#define SETPT(n, _x, _y, _z) \
+    do\
+    {\
+        w[n]  = (_x) ? x : (TRILINEAR_BASE - x);\
+        w[n] *= (_y) ? y : (TRILINEAR_BASE - y);\
+        w[n] *= (_z) ? z : (TRILINEAR_BASE - z);\
+        aa[n] = bb[n] = cc[n] = 0;\
+        if(w[n])\
+        {\
+            aa[n] = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z))];\
+            bb[n] = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 1];\
+            cc[n] = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 2];\
+        }\
+    }\
+    while(0)
+
+    SETPT(0, 0, 0, 0);
+    SETPT(1, 0, 0, 1);
+    SETPT(2, 0, 1, 0);
+    SETPT(3, 0, 1, 1);
+    SETPT(4, 1, 0, 0);
+    SETPT(5, 1, 0, 1);
+    SETPT(6, 1, 1, 0);
+    SETPT(7, 1, 1, 1);
+
+#undef SETPT
+
+    a = b = c = 0;
+    for(int i = 0; i < 8; i++)
+    {
+        a += aa[i]*w[i];
+        b += bb[i]*w[i];
+        c += cc[i]*w[i];
+    }
+
+    a = CV_DESCALE(a, trilinear_shift*3);
+    b = CV_DESCALE(b, trilinear_shift*3);
+    c = CV_DESCALE(c, trilinear_shift*3);
+}
+
+static inline void trilinearFloatSmoothstepInterpolate(int cx, int cy, int cz, int* LUT,
+                                                       int& a, int& b, int& c)
+{
+    cx = (cx >= 0) ? (cx <= LAB_BASE ? cx : LAB_BASE) : 0;
+    cy = (cy >= 0) ? (cy <= LAB_BASE ? cy : LAB_BASE) : 0;
+    cz = (cz >= 0) ? (cz <= LAB_BASE ? cz : LAB_BASE) : 0;
+
+    //LUT idx of origin pt of cube
+    int tx = cx >> (lab_base_shift - lab_lut_shift);
+    int ty = cy >> (lab_base_shift - lab_lut_shift);
+    int tz = cz >> (lab_base_shift - lab_lut_shift);
+
+    //x, y, z are [0; 1)
+    float x = 1.0f*((cx - (tx << (lab_base_shift - lab_lut_shift))) << lab_lut_shift)/LAB_BASE;
+    float y = 1.0f*((cy - (ty << (lab_base_shift - lab_lut_shift))) << lab_lut_shift)/LAB_BASE;
+    float z = 1.0f*((cz - (tz << (lab_base_shift - lab_lut_shift))) << lab_lut_shift)/LAB_BASE;
+
+    //smoothstepping
+    x = x * x * (3.0 - 2.0 * x);
+    y = y * y * (3.0 - 2.0 * y);
+    z = z * z * (3.0 - 2.0 * z);
+
+    float w[8];
+    int aa[8], bb[8], cc[8];
+
+#define SETPT(n, _x, _y, _z) \
+    do\
+    {\
+        w[n]  = (_x) ? x : (1.0f - x);\
+        w[n] *= (_y) ? y : (1.0f - y);\
+        w[n] *= (_z) ? z : (1.0f - z);\
+        aa[n] = bb[n] = cc[n] = 0;\
+        if(abs(w[n]) > FLT_EPSILON)\
+        {\
+            (aa[n]) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z))];\
+            (bb[n]) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 1];\
+            (cc[n]) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 2];\
+        }\
+    }\
+    while(0)
+
+    SETPT(0, 0, 0, 0);
+    SETPT(1, 0, 0, 1);
+    SETPT(2, 0, 1, 0);
+    SETPT(3, 0, 1, 1);
+    SETPT(4, 1, 0, 0);
+    SETPT(5, 1, 0, 1);
+    SETPT(6, 1, 1, 0);
+    SETPT(7, 1, 1, 1);
+
+#undef SETPT
+
+    a = b = c = 0;
+    for(int i = 0; i < 8; i++)
+    {
+        a += aa[i]*w[i];
+        b += bb[i]*w[i];
+        c += cc[i]*w[i];
+    }
+}
+
+
+static inline void trilinearFloatInterpolate(float cx, float cy, float cz, float* LUT,
+                                             float& a, float& b, float& c)
+{
+    cx = (cx >= 0) ? (cx <= 1.0f ? cx : 1.0f) : 0;
+    cy = (cy >= 0) ? (cy <= 1.0f ? cy : 1.0f) : 0;
+    cz = (cz >= 0) ? (cz <= 1.0f ? cz : 1.0f) : 0;
+
+    //LUT idx of origin pt of cube
+    int tx = cvFloor(cx*(LAB_LUT_DIM-1));
+    int ty = cvFloor(cy*(LAB_LUT_DIM-1));
+    int tz = cvFloor(cz*(LAB_LUT_DIM-1));
+
+    //x, y, z are [0; 1)
+    float x = cx*(LAB_LUT_DIM-1) - tx;
+    float y = cy*(LAB_LUT_DIM-1) - ty;
+    float z = cz*(LAB_LUT_DIM-1) - tz;
+
+    float w[8];
+    float aa[8], bb[8], cc[8];
+
+#define SETPT(n, _x, _y, _z) \
+    do\
+    {\
+        w[n]  = (_x) ? x : (1.0f - x);\
+        w[n] *= (_y) ? y : (1.0f - y);\
+        w[n] *= (_z) ? z : (1.0f - z);\
+        aa[n] = bb[n] = cc[n] = 0;\
+        if(abs(w[n]) > FLT_EPSILON)\
+        {\
+            (aa[n]) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z))];\
+            (bb[n]) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 1];\
+            (cc[n]) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 2];\
+        }\
+    }\
+    while(0)
+
+    SETPT(0, 0, 0, 0);
+    SETPT(1, 0, 0, 1);
+    SETPT(2, 0, 1, 0);
+    SETPT(3, 0, 1, 1);
+    SETPT(4, 1, 0, 0);
+    SETPT(5, 1, 0, 1);
+    SETPT(6, 1, 1, 0);
+    SETPT(7, 1, 1, 1);
+
+#undef SETPT
+
+    a = b = c = 0;
+    for(int i = 0; i < 8; i++)
+    {
+        a += aa[i]*w[i];
+        b += bb[i]*w[i];
+        c += cc[i]*w[i];
+    }
+}
+
+double cubicInterpolate (double p[4], double x)
+{
+return p[1] + 0.5 * x*(p[2] - p[0] + x*(2.0*p[0] - 5.0*p[1] + 4.0*p[2] - p[3] + x*(3.0*(p[1] - p[2]) + p[3] - p[0])));
+}
+
+double bicubicInterpolate (double p[4][4], double x, double y)
+{
+    double arr[4];
+    arr[0] = cubicInterpolate(p[0], y);
+    arr[1] = cubicInterpolate(p[1], y);
+    arr[2] = cubicInterpolate(p[2], y);
+    arr[3] = cubicInterpolate(p[3], y);
+    return cubicInterpolate(arr, x);
+}
+
+double tricubicInterpolate (double p[4][4][4], double x, double y, double z)
+{
+    double arr[4];
+    arr[0] = bicubicInterpolate(p[0], y, z);
+    arr[1] = bicubicInterpolate(p[1], y, z);
+    arr[2] = bicubicInterpolate(p[2], y, z);
+    arr[3] = bicubicInterpolate(p[3], y, z);
+    return cubicInterpolate(arr, x);
+}
+
+static inline void tricubicSlowInterpolate(int cx, int cy, int cz, int* LUT,
+                                           int& a, int& b, int& c)
+{
+    cx = (cx >= 0) ? (cx <= LAB_BASE ? cx : LAB_BASE) : 0;
+    cy = (cy >= 0) ? (cy <= LAB_BASE ? cy : LAB_BASE) : 0;
+    cz = (cz >= 0) ? (cz <= LAB_BASE ? cz : LAB_BASE) : 0;
+
+    //LUT idx of origin pt of cube
+    int tx = cx >> (lab_base_shift - lab_lut_shift);
+    int ty = cy >> (lab_base_shift - lab_lut_shift);
+    int tz = cz >> (lab_base_shift - lab_lut_shift);
+
+    //x, y, z are [0; 1)
+    float x = 1.0f*((cx - (tx << (lab_base_shift - lab_lut_shift))) << lab_lut_shift)/LAB_BASE;
+    float y = 1.0f*((cy - (ty << (lab_base_shift - lab_lut_shift))) << lab_lut_shift)/LAB_BASE;
+    float z = 1.0f*((cz - (tz << (lab_base_shift - lab_lut_shift))) << lab_lut_shift)/LAB_BASE;
+
+    double aa[4][4][4], bb[4][4][4], cc[4][4][4];
+
+#define clamp(v) ((v) > LAB_LUT_DIM ? LAB_LUT_DIM : ((v) < 0 ? 0 : (v)))
+    for(int xx = -1; xx < 3; xx++)
+    {
+        for(int yy = -1; yy < 3; yy++)
+        {
+            for(int zz = -1; zz < 3; zz++)
+            {
+                aa[xx+1][yy+1][zz+1] = LUT[3*clamp(tx+xx) + 3*LAB_LUT_DIM*clamp(ty+yy) + 3*LAB_LUT_DIM*LAB_LUT_DIM*clamp(tz+zz) + 0];
+                bb[xx+1][yy+1][zz+1] = LUT[3*clamp(tx+xx) + 3*LAB_LUT_DIM*clamp(ty+yy) + 3*LAB_LUT_DIM*LAB_LUT_DIM*clamp(tz+zz) + 1];
+                cc[xx+1][yy+1][zz+1] = LUT[3*clamp(tx+xx) + 3*LAB_LUT_DIM*clamp(ty+yy) + 3*LAB_LUT_DIM*LAB_LUT_DIM*clamp(tz+zz) + 2];
+            }
+        }
+    }
+
+#undef clamp
+
+    a = tricubicInterpolate(aa, x, y, z);
+    b = tricubicInterpolate(bb, x, y, z);
+    c = tricubicInterpolate(cc, x, y, z);
+}
+
+enum InterType
+{
+    LAB_INTER_TETRA, LAB_INTER_NO, LAB_INTER_TRILINEAR,
+    LAB_INTER_TRILINEAR_FLOAT, LAB_INTER_TRILINEAR_FLOAT_XYZ, LAB_INTER_TETRA_FLOAT, LAB_INTER_TETRA_FLOAT_XYZ,
+    LAB_INTER_TRILINEAR_SMOOTHSTEP, LAB_INTER_TRICUBIC
+};
+static InterType interType = LAB_INTER_NO;
+
+static inline void chooseInterpolate(float cx, float cy, float cz, Cvt_Type type,
+                                     float& a, float& b, float& c)
+{
+    int ia, ib, ic, icx = cx*LAB_BASE, icy = cy*LAB_BASE, icz = cz*LAB_BASE;
+    float fa, fb, fc, fcx = cx, fcy = cy, fcz = cz;
+    float* fLUT = type == LAB_TO_RGB ? Lab2RGBLUT_f : RGB2LabLUT_f;
+    int*   iLUT = type == LAB_TO_RGB ? Lab2RGBLUT_i32 : RGB2LabLUT_i32;
+    bool isFloat = false;
+    switch (interType)
+    {
+    case LAB_INTER_NO:
+        isFloat = false;
+        noInterpolate(icx, icy, icz, iLUT, ia, ib, ic);
+        break;
+    case LAB_INTER_TETRA:
+        isFloat = false;
+        tetraInterpolate(icx, icy, icz, iLUT, ia, ib, ic);
+        break;
+    case LAB_INTER_TRILINEAR:
+        isFloat = false;
+        trilinearInterpolate(icx, icy, icz, iLUT, ia, ib, ic);
+        break;
+    case LAB_INTER_TRILINEAR_FLOAT:
+        isFloat = true;
+        trilinearFloatInterpolate(fcx, fcy, fcz, fLUT, fa, fb, fc);
+        break;
+    case LAB_INTER_TETRA_FLOAT:
+        isFloat = true;
+        tetraFloatInterpolate(fcx, fcy, fcz, fLUT, fa, fb, fc);
+        break;
+    case LAB_INTER_TETRA_FLOAT_XYZ:
+        isFloat = true;
+        fLUT = type == LAB_TO_RGB ? Lab2XYZLUT_f : XYZ2LabLUT_f;
+        tetraFloatInterpolate(fcx, fcy, fcz, fLUT, fa, fb, fc);
+        break;
+    case LAB_INTER_TRILINEAR_FLOAT_XYZ:
+        isFloat = true;
+        fLUT = type == LAB_TO_RGB ? Lab2XYZLUT_f : XYZ2LabLUT_f;
+        trilinearFloatInterpolate(fcx, fcy, fcz, fLUT, fa, fb, fc);
+        break;
+    case LAB_INTER_TRILINEAR_SMOOTHSTEP:
+        isFloat = false;
+        trilinearFloatSmoothstepInterpolate(icx, icy, icz, iLUT, ia, ib, ic);
+        break;
+    case LAB_INTER_TRICUBIC:
+        isFloat = false;
+        tricubicSlowInterpolate(icx, icy, icz, iLUT, ia, ib, ic);
+        break;
+    default:
+        break;
+    }
+    if(isFloat)
+    {
+        a = fa, b = fb, c = fc;
+    }
+    else
+    {
+        a = ia*1.0f/LAB_BASE, b = ib*1.0f/LAB_BASE, c = ic*1.0f/LAB_BASE;
+    }
+}
+
+
+struct RGB2Lab_f
+{
+    typedef float channel_type;
+
+    RGB2Lab_f(int _srccn, int _blueIdx, const float* _coeffs,
+              const float* _whitept, bool _srgb)
+    : srccn(_srccn), srgb(_srgb), blueIdx(_blueIdx)
+    {
+        volatile int _3 = 3;
+        initLabTabs();
+
+        useTetraInterpolation = (!_coeffs && !_whitept && srgb && enableTetraInterpolation);
+
+        if (!_coeffs)
+            _coeffs = sRGB2XYZ_D65;
+        if (!_whitept)
+            _whitept = D65;
+
+        float scale[] = { 1.0f / _whitept[0], 1.0f, 1.0f / _whitept[2] };
+
+        for( int i = 0; i < _3; i++ )
+        {
+            int j = i * 3;
+            coeffs[j + (blueIdx ^ 2)] = _coeffs[j] * scale[i];
+            coeffs[j + 1] = _coeffs[j + 1] * scale[i];
+            coeffs[j + blueIdx] = _coeffs[j + 2] * scale[i];
+
+            CV_Assert( coeffs[j] >= 0 && coeffs[j + 1] >= 0 && coeffs[j + 2] >= 0 &&
+                       coeffs[j] + coeffs[j + 1] + coeffs[j + 2] < 1.5f*LabCbrtTabScale );
+        }
+    }
+
+    void operator()(const float* src, float* dst, int n) const
+    {
+        int i, scn = srccn, bIdx = blueIdx;
+        float gscale = GammaTabScale;
+        const float* gammaTab = srgb ? sRGBGammaTab : 0;
+        float C0 = coeffs[0], C1 = coeffs[1], C2 = coeffs[2],
+              C3 = coeffs[3], C4 = coeffs[4], C5 = coeffs[5],
+              C6 = coeffs[6], C7 = coeffs[7], C8 = coeffs[8];
+        n *= 3;
+
+        i = 0;
+        if(useTetraInterpolation)
+        {
+            for(; i < n; i += 3, src += scn)
+            {
+                float R = clip(src[bIdx]);
+                float G = clip(src[1]);
+                float B = clip(src[bIdx^2]);
+
+                if(interType == LAB_INTER_TRILINEAR_FLOAT_XYZ || interType == LAB_INTER_TETRA_FLOAT_XYZ)
+                {
+                    if (gammaTab)
+                    {
+                        R = splineInterpolate(R * gscale, gammaTab, GAMMA_TAB_SIZE);
+                        G = splineInterpolate(G * gscale, gammaTab, GAMMA_TAB_SIZE);
+                        B = splineInterpolate(B * gscale, gammaTab, GAMMA_TAB_SIZE);
+                    }
+
+                    float X = R*C0 + G*C1 + B*C2;
+                    float Y = R*C3 + G*C4 + B*C5;
+                    float Z = R*C6 + G*C7 + B*C8;
+                    R = X, G = Y, B = Z;
+                }
+
+                float L, a, b;
+                chooseInterpolate(R, G, B, RGB_TO_LAB, L, a, b);
+
+                dst[i] = L*100.0f;
+                dst[i + 1] = a*256.0f - 128.0f;
+                dst[i + 2] = b*256.0f - 128.0f;
+            }
+        }
+
+        static const float _1_3 = 1.0f / 3.0f;
+        static const float _a = 16.0f / 116.0f;
+        for (; i < n; i += 3, src += scn )
+        {
+            float R = clip(src[0]);
+            float G = clip(src[1]);
+            float B = clip(src[2]);
+
+            if (gammaTab)
+            {
+                R = splineInterpolate(R * gscale, gammaTab, GAMMA_TAB_SIZE);
+                G = splineInterpolate(G * gscale, gammaTab, GAMMA_TAB_SIZE);
+                B = splineInterpolate(B * gscale, gammaTab, GAMMA_TAB_SIZE);
+            }
+            float X = R*C0 + G*C1 + B*C2;
+            float Y = R*C3 + G*C4 + B*C5;
+            float Z = R*C6 + G*C7 + B*C8;
+
+            float FX = X > 0.008856f ? std::pow(X, _1_3) : (7.787f * X + _a);
+            float FY = Y > 0.008856f ? std::pow(Y, _1_3) : (7.787f * Y + _a);
+            float FZ = Z > 0.008856f ? std::pow(Z, _1_3) : (7.787f * Z + _a);
+
+            float L = Y > 0.008856f ? (116.f * FY - 16.f) : (903.3f * Y);
+            float a = 500.f * (FX - FY);
+            float b = 200.f * (FY - FZ);
+
+            dst[i] = L;
+            dst[i + 1] = a;
+            dst[i + 2] = b;
+        }
+    }
+
+    int srccn;
+    float coeffs[9];
+    bool srgb;
+    bool useTetraInterpolation;
+    int blueIdx;
+};
+
+
+struct Lab2RGB_f
+{
+    typedef float channel_type;
+
+    Lab2RGB_f( int _dstcn, int _blueIdx, const float* _coeffs,
+              const float* _whitept, bool _srgb )
+    : dstcn(_dstcn), srgb(_srgb), blueIdx(_blueIdx)
+    {
+        initLabTabs();
+
+        useTetraInterpolation = (!_coeffs && !_whitept && srgb && enableTetraInterpolation);
+
+        if(!_coeffs)
+            _coeffs = XYZ2sRGB_D65;
+        if(!_whitept)
+            _whitept = D65;
+
+        for( int i = 0; i < 3; i++ )
+        {
+            coeffs[i+(blueIdx^2)*3] = _coeffs[i]*_whitept[i];
+            coeffs[i+3] = _coeffs[i+3]*_whitept[i];
+            coeffs[i+blueIdx*3] = _coeffs[i+6]*_whitept[i];
+        }
+
+        lThresh = 0.008856f * 903.3f;
+        fThresh = 7.787f * 0.008856f + 16.0f / 116.0f;
+        #if CV_SSE2
+        haveSIMD = checkHardwareSupport(CV_CPU_SSE2);
+        #endif
+    }
+
+    #if CV_SSE2
+    void process(__m128& v_li0, __m128& v_li1, __m128& v_ai0,
+                 __m128& v_ai1, __m128& v_bi0, __m128& v_bi1) const
+    {
+        __m128 v_y00 = _mm_mul_ps(v_li0, _mm_set1_ps(1.0f/903.3f));
+        __m128 v_y01 = _mm_mul_ps(v_li1, _mm_set1_ps(1.0f/903.3f));
+        __m128 v_fy00 = _mm_add_ps(_mm_mul_ps(_mm_set1_ps(7.787f), v_y00), _mm_set1_ps(16.0f/116.0f));
+        __m128 v_fy01 = _mm_add_ps(_mm_mul_ps(_mm_set1_ps(7.787f), v_y01), _mm_set1_ps(16.0f/116.0f));
+
+        __m128 v_fy10 = _mm_mul_ps(_mm_add_ps(v_li0, _mm_set1_ps(16.0f)), _mm_set1_ps(1.0f/116.0f));
+        __m128 v_fy11 = _mm_mul_ps(_mm_add_ps(v_li1, _mm_set1_ps(16.0f)), _mm_set1_ps(1.0f/116.0f));
+        __m128 v_y10 = _mm_mul_ps(_mm_mul_ps(v_fy10, v_fy10), v_fy10);
+        __m128 v_y11 = _mm_mul_ps(_mm_mul_ps(v_fy11, v_fy11), v_fy11);
+
+        __m128 v_cmpli0 = _mm_cmple_ps(v_li0, _mm_set1_ps(lThresh));
+        __m128 v_cmpli1 = _mm_cmple_ps(v_li1, _mm_set1_ps(lThresh));
+        v_y00 = _mm_and_ps(v_cmpli0, v_y00);
+        v_y01 = _mm_and_ps(v_cmpli1, v_y01);
+        v_fy00 = _mm_and_ps(v_cmpli0, v_fy00);
+        v_fy01 = _mm_and_ps(v_cmpli1, v_fy01);
+        v_y10 = _mm_andnot_ps(v_cmpli0, v_y10);
+        v_y11 = _mm_andnot_ps(v_cmpli1, v_y11);
+        v_fy10 = _mm_andnot_ps(v_cmpli0, v_fy10);
+        v_fy11 = _mm_andnot_ps(v_cmpli1, v_fy11);
+        __m128 v_y0 = _mm_or_ps(v_y00, v_y10);
+        __m128 v_y1 = _mm_or_ps(v_y01, v_y11);
+        __m128 v_fy0 = _mm_or_ps(v_fy00, v_fy10);
+        __m128 v_fy1 = _mm_or_ps(v_fy01, v_fy11);
+
+        __m128 v_fxz00 = _mm_add_ps(v_fy0, _mm_mul_ps(v_ai0, _mm_set1_ps(0.002f)));
+        __m128 v_fxz01 = _mm_add_ps(v_fy1, _mm_mul_ps(v_ai1, _mm_set1_ps(0.002f)));
+        __m128 v_fxz10 = _mm_sub_ps(v_fy0, _mm_mul_ps(v_bi0, _mm_set1_ps(0.005f)));
+        __m128 v_fxz11 = _mm_sub_ps(v_fy1, _mm_mul_ps(v_bi1, _mm_set1_ps(0.005f)));
+
+        __m128 v_fxz000 = _mm_mul_ps(_mm_sub_ps(v_fxz00, _mm_set1_ps(16.0f/116.0f)), _mm_set1_ps(1.0f/7.787f));
+        __m128 v_fxz001 = _mm_mul_ps(_mm_sub_ps(v_fxz01, _mm_set1_ps(16.0f/116.0f)), _mm_set1_ps(1.0f/7.787f));
+        __m128 v_fxz010 = _mm_mul_ps(_mm_sub_ps(v_fxz10, _mm_set1_ps(16.0f/116.0f)), _mm_set1_ps(1.0f/7.787f));
+        __m128 v_fxz011 = _mm_mul_ps(_mm_sub_ps(v_fxz11, _mm_set1_ps(16.0f/116.0f)), _mm_set1_ps(1.0f/7.787f));
+
+        __m128 v_fxz100 = _mm_mul_ps(_mm_mul_ps(v_fxz00, v_fxz00), v_fxz00);
+        __m128 v_fxz101 = _mm_mul_ps(_mm_mul_ps(v_fxz01, v_fxz01), v_fxz01);
+        __m128 v_fxz110 = _mm_mul_ps(_mm_mul_ps(v_fxz10, v_fxz10), v_fxz10);
+        __m128 v_fxz111 = _mm_mul_ps(_mm_mul_ps(v_fxz11, v_fxz11), v_fxz11);
+
+        __m128 v_cmpfxz00 = _mm_cmple_ps(v_fxz00, _mm_set1_ps(fThresh));
+        __m128 v_cmpfxz01 = _mm_cmple_ps(v_fxz01, _mm_set1_ps(fThresh));
+        __m128 v_cmpfxz10 = _mm_cmple_ps(v_fxz10, _mm_set1_ps(fThresh));
+        __m128 v_cmpfxz11 = _mm_cmple_ps(v_fxz11, _mm_set1_ps(fThresh));
+        v_fxz000 = _mm_and_ps(v_cmpfxz00, v_fxz000);
+        v_fxz001 = _mm_and_ps(v_cmpfxz01, v_fxz001);
+        v_fxz010 = _mm_and_ps(v_cmpfxz10, v_fxz010);
+        v_fxz011 = _mm_and_ps(v_cmpfxz11, v_fxz011);
+        v_fxz100 = _mm_andnot_ps(v_cmpfxz00, v_fxz100);
+        v_fxz101 = _mm_andnot_ps(v_cmpfxz01, v_fxz101);
+        v_fxz110 = _mm_andnot_ps(v_cmpfxz10, v_fxz110);
+        v_fxz111 = _mm_andnot_ps(v_cmpfxz11, v_fxz111);
+        __m128 v_x0 = _mm_or_ps(v_fxz000, v_fxz100);
+        __m128 v_x1 = _mm_or_ps(v_fxz001, v_fxz101);
+        __m128 v_z0 = _mm_or_ps(v_fxz010, v_fxz110);
+        __m128 v_z1 = _mm_or_ps(v_fxz011, v_fxz111);
+
+        __m128 v_ro0 = _mm_mul_ps(_mm_set1_ps(coeffs[0]), v_x0);
+        __m128 v_ro1 = _mm_mul_ps(_mm_set1_ps(coeffs[0]), v_x1);
+        __m128 v_go0 = _mm_mul_ps(_mm_set1_ps(coeffs[3]), v_x0);
+        __m128 v_go1 = _mm_mul_ps(_mm_set1_ps(coeffs[3]), v_x1);
+        __m128 v_bo0 = _mm_mul_ps(_mm_set1_ps(coeffs[6]), v_x0);
+        __m128 v_bo1 = _mm_mul_ps(_mm_set1_ps(coeffs[6]), v_x1);
+        v_ro0 = _mm_add_ps(v_ro0, _mm_mul_ps(_mm_set1_ps(coeffs[1]), v_y0));
+        v_ro1 = _mm_add_ps(v_ro1, _mm_mul_ps(_mm_set1_ps(coeffs[1]), v_y1));
+        v_go0 = _mm_add_ps(v_go0, _mm_mul_ps(_mm_set1_ps(coeffs[4]), v_y0));
+        v_go1 = _mm_add_ps(v_go1, _mm_mul_ps(_mm_set1_ps(coeffs[4]), v_y1));
+        v_bo0 = _mm_add_ps(v_bo0, _mm_mul_ps(_mm_set1_ps(coeffs[7]), v_y0));
+        v_bo1 = _mm_add_ps(v_bo1, _mm_mul_ps(_mm_set1_ps(coeffs[7]), v_y1));
+        v_ro0 = _mm_add_ps(v_ro0, _mm_mul_ps(_mm_set1_ps(coeffs[2]), v_z0));
+        v_ro1 = _mm_add_ps(v_ro1, _mm_mul_ps(_mm_set1_ps(coeffs[2]), v_z1));
+        v_go0 = _mm_add_ps(v_go0, _mm_mul_ps(_mm_set1_ps(coeffs[5]), v_z0));
+        v_go1 = _mm_add_ps(v_go1, _mm_mul_ps(_mm_set1_ps(coeffs[5]), v_z1));
+        v_bo0 = _mm_add_ps(v_bo0, _mm_mul_ps(_mm_set1_ps(coeffs[8]), v_z0));
+        v_bo1 = _mm_add_ps(v_bo1, _mm_mul_ps(_mm_set1_ps(coeffs[8]), v_z1));
+
+        v_li0 = _mm_min_ps(_mm_max_ps(v_ro0, _mm_setzero_ps()), _mm_set1_ps(1.0f));
+        v_li1 = _mm_min_ps(_mm_max_ps(v_ro1, _mm_setzero_ps()), _mm_set1_ps(1.0f));
+        v_ai0 = _mm_min_ps(_mm_max_ps(v_go0, _mm_setzero_ps()), _mm_set1_ps(1.0f));
+        v_ai1 = _mm_min_ps(_mm_max_ps(v_go1, _mm_setzero_ps()), _mm_set1_ps(1.0f));
+        v_bi0 = _mm_min_ps(_mm_max_ps(v_bo0, _mm_setzero_ps()), _mm_set1_ps(1.0f));
+        v_bi1 = _mm_min_ps(_mm_max_ps(v_bo1, _mm_setzero_ps()), _mm_set1_ps(1.0f));
+    }
+    #endif
+
+    void operator()(const float* src, float* dst, int n) const
+    {
+        int i = 0, dcn = dstcn, bIdx = blueIdx;
+        const float* gammaTab = srgb ? sRGBInvGammaTab : 0;
+        float gscale = GammaTabScale;
+        float C0 = coeffs[0], C1 = coeffs[1], C2 = coeffs[2],
+        C3 = coeffs[3], C4 = coeffs[4], C5 = coeffs[5],
+        C6 = coeffs[6], C7 = coeffs[7], C8 = coeffs[8];
+        float alpha = ColorChannel<float>::max();
+        n *= 3;
+
+        if(useTetraInterpolation)
+        {
+            for (; i < n; i += 3, dst += dcn)
+            {
+                float li = src[i];
+                float ai = src[i + 1];
+                float bi = src[i + 2];
+
+                float ro, go, bo;
+
+                chooseInterpolate(li/100.0f, (ai+128.0f)/256.0f, (bi+128.0f)/256.0f,
+                                  LAB_TO_RGB, ro, go, bo);
+
+                if(interType == LAB_INTER_TRILINEAR_FLOAT_XYZ || interType == LAB_INTER_TETRA_FLOAT_XYZ)
+                {
+                    float x = ro, y = go, z = bo;
+                    ro = C0 * x + C1 * y + C2 * z;
+                    go = C3 * x + C4 * y + C5 * z;
+                    bo = C6 * x + C7 * y + C8 * z;
+                    ro = clip(ro);
+                    go = clip(go);
+                    bo = clip(bo);
+
+                    /*
+                    ro = applyInvGamma(ro);
+                    go = applyInvGamma(go);
+                    bo = applyInvGamma(bo);
+                    */
+                    if (gammaTab)
+                    {
+                        ro = splineInterpolate(ro * gscale, gammaTab, GAMMA_TAB_SIZE);
+                        go = splineInterpolate(go * gscale, gammaTab, GAMMA_TAB_SIZE);
+                        bo = splineInterpolate(bo * gscale, gammaTab, GAMMA_TAB_SIZE);
+                    }
+                }
+
+                dst[bIdx] = ro, dst[1] = go, dst[bIdx^2] = bo;
+                if( dcn == 4 )
+                    dst[3] = alpha;
+            }
+        }
+
+        #if CV_SSE2
+        if (haveSIMD)
+        {
+            for (; i <= n - 24; i += 24, dst += dcn * 8)
+            {
+                __m128 v_li0 = _mm_loadu_ps(src + i +  0);
+                __m128 v_li1 = _mm_loadu_ps(src + i +  4);
+                __m128 v_ai0 = _mm_loadu_ps(src + i +  8);
+                __m128 v_ai1 = _mm_loadu_ps(src + i + 12);
+                __m128 v_bi0 = _mm_loadu_ps(src + i + 16);
+                __m128 v_bi1 = _mm_loadu_ps(src + i + 20);
+
+                _mm_deinterleave_ps(v_li0, v_li1, v_ai0, v_ai1, v_bi0, v_bi1);
+
+                process(v_li0, v_li1, v_ai0, v_ai1, v_bi0, v_bi1);
+
+                if (gammaTab)
+                {
+                    __m128 v_gscale = _mm_set1_ps(gscale);
+                    v_li0 = _mm_mul_ps(v_li0, v_gscale);
+                    v_li1 = _mm_mul_ps(v_li1, v_gscale);
+                    v_ai0 = _mm_mul_ps(v_ai0, v_gscale);
+                    v_ai1 = _mm_mul_ps(v_ai1, v_gscale);
+                    v_bi0 = _mm_mul_ps(v_bi0, v_gscale);
+                    v_bi1 = _mm_mul_ps(v_bi1, v_gscale);
+
+                    splineInterpolate(v_li0, gammaTab, GAMMA_TAB_SIZE);
+                    splineInterpolate(v_li1, gammaTab, GAMMA_TAB_SIZE);
+                    splineInterpolate(v_ai0, gammaTab, GAMMA_TAB_SIZE);
+                    splineInterpolate(v_ai1, gammaTab, GAMMA_TAB_SIZE);
+                    splineInterpolate(v_bi0, gammaTab, GAMMA_TAB_SIZE);
+                    splineInterpolate(v_bi1, gammaTab, GAMMA_TAB_SIZE);
+                }
+
+                if( dcn == 4 )
+                {
+                    __m128 v_a0 = _mm_set1_ps(alpha);
+                    __m128 v_a1 = _mm_set1_ps(alpha);
+                    _mm_interleave_ps(v_li0, v_li1, v_ai0, v_ai1, v_bi0, v_bi1, v_a0, v_a1);
+
+                    _mm_storeu_ps(dst +  0, v_li0);
+                    _mm_storeu_ps(dst +  4, v_li1);
+                    _mm_storeu_ps(dst +  8, v_ai0);
+                    _mm_storeu_ps(dst + 12, v_ai1);
+                    _mm_storeu_ps(dst + 16, v_bi0);
+                    _mm_storeu_ps(dst + 20, v_bi1);
+                    _mm_storeu_ps(dst + 24, v_a0);
+                    _mm_storeu_ps(dst + 28, v_a1);
+                }
+                else
+                {
+                    _mm_interleave_ps(v_li0, v_li1, v_ai0, v_ai1, v_bi0, v_bi1);
+
+                    _mm_storeu_ps(dst +  0, v_li0);
+                    _mm_storeu_ps(dst +  4, v_li1);
+                    _mm_storeu_ps(dst +  8, v_ai0);
+                    _mm_storeu_ps(dst + 12, v_ai1);
+                    _mm_storeu_ps(dst + 16, v_bi0);
+                    _mm_storeu_ps(dst + 20, v_bi1);
+                }
+            }
+        }
+        #endif
+        for (; i < n; i += 3, dst += dcn)
+        {
+            float li = src[i];
+            float ai = src[i + 1];
+            float bi = src[i + 2];
+
+            float y, fy;
+            if (li <= lThresh)
+            {
+                y = li / 903.3f;
+                fy = 7.787f * y + 16.0f / 116.0f;
+            }
+            else
+            {
+                fy = (li + 16.0f) / 116.0f;
+                y = fy * fy * fy;
+            }
+
+            float fxz[] = { ai / 500.0f + fy, fy - bi / 200.0f };
+
+            for (int j = 0; j < 2; j++)
+                if (fxz[j] <= fThresh)
+                    fxz[j] = (fxz[j] - 16.0f / 116.0f) / 7.787f;
+                else
+                    fxz[j] = fxz[j] * fxz[j] * fxz[j];
+
+            float x = fxz[0], z = fxz[1];
+            float ro = C0 * x + C1 * y + C2 * z;
+            float go = C3 * x + C4 * y + C5 * z;
+            float bo = C6 * x + C7 * y + C8 * z;
+            ro = clip(ro);
+            go = clip(go);
+            bo = clip(bo);
+
+            if (gammaTab)
+            {
+                ro = splineInterpolate(ro * gscale, gammaTab, GAMMA_TAB_SIZE);
+                go = splineInterpolate(go * gscale, gammaTab, GAMMA_TAB_SIZE);
+                bo = splineInterpolate(bo * gscale, gammaTab, GAMMA_TAB_SIZE);
+            }
+
+            dst[0] = ro, dst[1] = go, dst[2] = bo;
+            if( dcn == 4 )
+                dst[3] = alpha;
+        }
+    }
+
+    int dstcn;
+    float coeffs[9];
+    bool srgb;
+    float lThresh;
+    float fThresh;
+    #if CV_SSE2
+    bool haveSIMD;
+    #endif
+    int blueIdx;
+    bool useTetraInterpolation;
+};
+
+
+//TODO: rewrite it to use interpolation as option
+struct RGB2Lab_b
+{
+    typedef uchar channel_type;
+
+    RGB2Lab_b(int _srccn, int blueIdx, const float* _coeffs,
+              const float* _whitept, bool _srgb)
+    : srccn(_srccn), srgb(_srgb)
+    {
+        static volatile int _3 = 3;
+        initLabTabs();
+
+        if (!_coeffs)
+            _coeffs = sRGB2XYZ_D65;
+        if (!_whitept)
+            _whitept = D65;
+
+        float scale[] =
+        {
+            (1 << lab_shift)/_whitept[0],
+            (float)(1 << lab_shift),
+            (1 << lab_shift)/_whitept[2]
+        };
+
+        for( int i = 0; i < _3; i++ )
+        {
+            coeffs[i*3+(blueIdx^2)] = cvRound(_coeffs[i*3]*scale[i]);
+            coeffs[i*3+1] = cvRound(_coeffs[i*3+1]*scale[i]);
+            coeffs[i*3+blueIdx] = cvRound(_coeffs[i*3+2]*scale[i]);
+
+            CV_Assert( coeffs[i] >= 0 && coeffs[i*3+1] >= 0 && coeffs[i*3+2] >= 0 &&
+                      coeffs[i*3] + coeffs[i*3+1] + coeffs[i*3+2] < 2*(1 << lab_shift) );
+        }
+    }
+
+    void operator()(const uchar* src, uchar* dst, int n) const
+    {
+        const int Lscale = (116*255+50)/100;
+        const int Lshift = -((16*255*(1 << lab_shift2) + 50)/100);
+        const ushort* tab = srgb ? sRGBGammaTab_b : linearGammaTab_b;
+        int i, scn = srccn;
+        int C0 = coeffs[0], C1 = coeffs[1], C2 = coeffs[2],
+            C3 = coeffs[3], C4 = coeffs[4], C5 = coeffs[5],
+            C6 = coeffs[6], C7 = coeffs[7], C8 = coeffs[8];
+        n *= 3;
+
+        for( i = 0; i < n; i += 3, src += scn )
+        {
+            int R = tab[src[0]], G = tab[src[1]], B = tab[src[2]];
+            int fX = LabCbrtTab_b[CV_DESCALE(R*C0 + G*C1 + B*C2, lab_shift)];
+            int fY = LabCbrtTab_b[CV_DESCALE(R*C3 + G*C4 + B*C5, lab_shift)];
+            int fZ = LabCbrtTab_b[CV_DESCALE(R*C6 + G*C7 + B*C8, lab_shift)];
+
+            int L = CV_DESCALE( Lscale*fY + Lshift, lab_shift2 );
+            int a = CV_DESCALE( 500*(fX - fY) + 128*(1 << lab_shift2), lab_shift2 );
+            int b = CV_DESCALE( 200*(fY - fZ) + 128*(1 << lab_shift2), lab_shift2 );
+
+            dst[i] = saturate_cast<uchar>(L);
+            dst[i+1] = saturate_cast<uchar>(a);
+            dst[i+2] = saturate_cast<uchar>(b);
+        }
+    }
+
+    int srccn;
+    int coeffs[9];
+    bool srgb;
+};
+
+
+//TODO: rewrite it to work w/o scaling values
+struct Lab2RGB_b
+{
+    typedef uchar channel_type;
+
+    Lab2RGB_b( int _dstcn, int blueIdx, const float* _coeffs,
+               const float* _whitept, bool _srgb )
+    : dstcn(_dstcn), cvt(3, blueIdx, _coeffs, _whitept, _srgb )
+    {
+        #if CV_NEON
+        v_scale_inv = vdupq_n_f32(100.f/255.f);
+        v_scale = vdupq_n_f32(255.f);
+        v_alpha = vdup_n_u8(ColorChannel<uchar>::max());
+        v_128 = vdupq_n_f32(128.0f);
+        #elif CV_SSE2
+        v_scale = _mm_set1_ps(255.f);
+        v_alpha = _mm_set1_ps(ColorChannel<uchar>::max());
+        v_zero = _mm_setzero_si128();
+        haveSIMD = checkHardwareSupport(CV_CPU_SSE2);
+        #endif
+    }
+
+    #if CV_SSE2
+    // 16s x 8
+    void process(__m128i v_r, __m128i v_g, __m128i v_b,
+                 const __m128& v_coeffs_, const __m128& v_res_,
+                 float * buf) const
+    {
+        __m128 v_r0 = _mm_cvtepi32_ps(_mm_unpacklo_epi16(v_r, v_zero));
+        __m128 v_g0 = _mm_cvtepi32_ps(_mm_unpacklo_epi16(v_g, v_zero));
+        __m128 v_b0 = _mm_cvtepi32_ps(_mm_unpacklo_epi16(v_b, v_zero));
+
+        __m128 v_r1 = _mm_cvtepi32_ps(_mm_unpackhi_epi16(v_r, v_zero));
+        __m128 v_g1 = _mm_cvtepi32_ps(_mm_unpackhi_epi16(v_g, v_zero));
+        __m128 v_b1 = _mm_cvtepi32_ps(_mm_unpackhi_epi16(v_b, v_zero));
+
+        __m128 v_coeffs = v_coeffs_;
+        __m128 v_res = v_res_;
+
+        v_r0 = _mm_sub_ps(_mm_mul_ps(v_r0, v_coeffs), v_res);
+        v_g1 = _mm_sub_ps(_mm_mul_ps(v_g1, v_coeffs), v_res);
+
+        v_coeffs = _mm_castsi128_ps(_mm_shuffle_epi32(_mm_castps_si128(v_coeffs), 0x49));
+        v_res = _mm_castsi128_ps(_mm_shuffle_epi32(_mm_castps_si128(v_res), 0x49));
+
+        v_r1 = _mm_sub_ps(_mm_mul_ps(v_r1, v_coeffs), v_res);
+        v_b0 = _mm_sub_ps(_mm_mul_ps(v_b0, v_coeffs), v_res);
+
+        v_coeffs = _mm_castsi128_ps(_mm_shuffle_epi32(_mm_castps_si128(v_coeffs), 0x49));
+        v_res = _mm_castsi128_ps(_mm_shuffle_epi32(_mm_castps_si128(v_res), 0x49));
+
+        v_g0 = _mm_sub_ps(_mm_mul_ps(v_g0, v_coeffs), v_res);
+        v_b1 = _mm_sub_ps(_mm_mul_ps(v_b1, v_coeffs), v_res);
+
+        _mm_store_ps(buf, v_r0);
+        _mm_store_ps(buf + 4, v_r1);
+        _mm_store_ps(buf + 8, v_g0);
+        _mm_store_ps(buf + 12, v_g1);
+        _mm_store_ps(buf + 16, v_b0);
+        _mm_store_ps(buf + 20, v_b1);
+    }
+    #endif
+
+    void operator()(const uchar* src, uchar* dst, int n) const
+    {
+        int i, j, dcn = dstcn;
+        uchar alpha = ColorChannel<uchar>::max();
+        float CV_DECL_ALIGNED(16) buf[3*BLOCK_SIZE];
+        #if CV_SSE2
+        __m128 v_coeffs = _mm_set_ps(100.f/255.f, 1.f, 1.f, 100.f/255.f);
+        __m128 v_res = _mm_set_ps(0.f, 128.f, 128.f, 0.f);
+        #endif
+
+        for( i = 0; i < n; i += BLOCK_SIZE, src += BLOCK_SIZE*3 )
+        {
+            int dn = std::min(n - i, (int)BLOCK_SIZE);
+            j = 0;
+
+            #if CV_NEON
+            for ( ; j <= (dn - 8) * 3; j += 24)
+            {
+                uint8x8x3_t v_src = vld3_u8(src + j);
+                uint16x8_t v_t0 = vmovl_u8(v_src.val[0]),
+                           v_t1 = vmovl_u8(v_src.val[1]),
+                           v_t2 = vmovl_u8(v_src.val[2]);
+
+                float32x4x3_t v_dst;
+                v_dst.val[0] = vmulq_f32(vcvtq_f32_u32(vmovl_u16(vget_low_u16(v_t0))), v_scale_inv);
+                v_dst.val[1] = vsubq_f32(vcvtq_f32_u32(vmovl_u16(vget_low_u16(v_t1))), v_128);
+                v_dst.val[2] = vsubq_f32(vcvtq_f32_u32(vmovl_u16(vget_low_u16(v_t2))), v_128);
+                vst3q_f32(buf + j, v_dst);
+
+                v_dst.val[0] = vmulq_f32(vcvtq_f32_u32(vmovl_u16(vget_high_u16(v_t0))), v_scale_inv);
+                v_dst.val[1] = vsubq_f32(vcvtq_f32_u32(vmovl_u16(vget_high_u16(v_t1))), v_128);
+                v_dst.val[2] = vsubq_f32(vcvtq_f32_u32(vmovl_u16(vget_high_u16(v_t2))), v_128);
+                vst3q_f32(buf + j + 12, v_dst);
+            }
+            #elif CV_SSE2
+            if (haveSIMD)
+            {
+                for ( ; j <= (dn - 8) * 3; j += 24)
+                {
+                    __m128i v_src0 = _mm_loadu_si128((__m128i const *)(src + j));
+                    __m128i v_src1 = _mm_loadl_epi64((__m128i const *)(src + j + 16));
+
+                    process(_mm_unpacklo_epi8(v_src0, v_zero),
+                            _mm_unpackhi_epi8(v_src0, v_zero),
+                            _mm_unpacklo_epi8(v_src1, v_zero),
+                            v_coeffs, v_res,
+                            buf + j);
+                }
+            }
+            #endif
+
+            for( ; j < dn*3; j += 3 )
+            {
+                buf[j] = src[j]*(100.f/255.f);
+                buf[j+1] = (float)(src[j+1] - 128);
+                buf[j+2] = (float)(src[j+2] - 128);
+            }
+            cvt(buf, buf, dn);
+            j = 0;
+
+            #if CV_NEON
+            for ( ; j <= (dn - 8) * 3; j += 24, dst += dcn * 8)
+            {
+                float32x4x3_t v_src0 = vld3q_f32(buf + j), v_src1 = vld3q_f32(buf + j + 12);
+                uint8x8_t v_dst0 = vqmovn_u16(vcombine_u16(vqmovn_u32(cv_vrndq_u32_f32(vmulq_f32(v_src0.val[0], v_scale))),
+                                                           vqmovn_u32(cv_vrndq_u32_f32(vmulq_f32(v_src1.val[0], v_scale)))));
+                uint8x8_t v_dst1 = vqmovn_u16(vcombine_u16(vqmovn_u32(cv_vrndq_u32_f32(vmulq_f32(v_src0.val[1], v_scale))),
+                                                           vqmovn_u32(cv_vrndq_u32_f32(vmulq_f32(v_src1.val[1], v_scale)))));
+                uint8x8_t v_dst2 = vqmovn_u16(vcombine_u16(vqmovn_u32(cv_vrndq_u32_f32(vmulq_f32(v_src0.val[2], v_scale))),
+                                                           vqmovn_u32(cv_vrndq_u32_f32(vmulq_f32(v_src1.val[2], v_scale)))));
+
+                if (dcn == 4)
+                {
+                    uint8x8x4_t v_dst;
+                    v_dst.val[0] = v_dst0;
+                    v_dst.val[1] = v_dst1;
+                    v_dst.val[2] = v_dst2;
+                    v_dst.val[3] = v_alpha;
+                    vst4_u8(dst, v_dst);
+                }
+                else
+                {
+                    uint8x8x3_t v_dst;
+                    v_dst.val[0] = v_dst0;
+                    v_dst.val[1] = v_dst1;
+                    v_dst.val[2] = v_dst2;
+                    vst3_u8(dst, v_dst);
+                }
+            }
+            #elif CV_SSE2
+            if (dcn == 3 && haveSIMD)
+            {
+                for ( ; j <= (dn * 3 - 16); j += 16, dst += 16)
+                {
+                    __m128 v_src0 = _mm_mul_ps(_mm_load_ps(buf + j), v_scale);
+                    __m128 v_src1 = _mm_mul_ps(_mm_load_ps(buf + j + 4), v_scale);
+                    __m128 v_src2 = _mm_mul_ps(_mm_load_ps(buf + j + 8), v_scale);
+                    __m128 v_src3 = _mm_mul_ps(_mm_load_ps(buf + j + 12), v_scale);
+
+                    __m128i v_dst0 = _mm_packs_epi32(_mm_cvtps_epi32(v_src0),
+                                                     _mm_cvtps_epi32(v_src1));
+                    __m128i v_dst1 = _mm_packs_epi32(_mm_cvtps_epi32(v_src2),
+                                                     _mm_cvtps_epi32(v_src3));
+
+                    _mm_storeu_si128((__m128i *)dst, _mm_packus_epi16(v_dst0, v_dst1));
+                }
+
+                int jr = j % 3;
+                if (jr)
+                    dst -= jr, j -= jr;
+            }
+            else if (dcn == 4 && haveSIMD)
+            {
+                for ( ; j <= (dn * 3 - 12); j += 12, dst += 16)
+                {
+                    __m128 v_buf0 = _mm_mul_ps(_mm_load_ps(buf + j), v_scale);
+                    __m128 v_buf1 = _mm_mul_ps(_mm_load_ps(buf + j + 4), v_scale);
+                    __m128 v_buf2 = _mm_mul_ps(_mm_load_ps(buf + j + 8), v_scale);
+
+                    __m128 v_ba0 = _mm_unpackhi_ps(v_buf0, v_alpha);
+                    __m128 v_ba1 = _mm_unpacklo_ps(v_buf2, v_alpha);
+
+                    __m128i v_src0 = _mm_cvtps_epi32(_mm_shuffle_ps(v_buf0, v_ba0, 0x44));
+                    __m128i v_src1 = _mm_shuffle_epi32(_mm_cvtps_epi32(_mm_shuffle_ps(v_ba0, v_buf1, 0x4e)), 0x78);
+                    __m128i v_src2 = _mm_cvtps_epi32(_mm_shuffle_ps(v_buf1, v_ba1, 0x4e));
+                    __m128i v_src3 = _mm_shuffle_epi32(_mm_cvtps_epi32(_mm_shuffle_ps(v_ba1, v_buf2, 0xee)), 0x78);
+
+                    __m128i v_dst0 = _mm_packs_epi32(v_src0, v_src1);
+                    __m128i v_dst1 = _mm_packs_epi32(v_src2, v_src3);
+
+                    _mm_storeu_si128((__m128i *)dst, _mm_packus_epi16(v_dst0, v_dst1));
+                }
+
+                int jr = j % 3;
+                if (jr)
+                    dst -= jr, j -= jr;
+            }
+            #endif
+
+            for( ; j < dn*3; j += 3, dst += dcn )
+            {
+                dst[0] = saturate_cast<uchar>(buf[j]*255.f);
+                dst[1] = saturate_cast<uchar>(buf[j+1]*255.f);
+                dst[2] = saturate_cast<uchar>(buf[j+2]*255.f);
+                if( dcn == 4 )
+                    dst[3] = alpha;
+            }
+        }
+    }
+
+    int dstcn;
+    Lab2RGB_f cvt;
+
+    #if CV_NEON
+    float32x4_t v_scale, v_scale_inv, v_128;
+    uint8x8_t v_alpha;
+    #elif CV_SSE2
+    __m128 v_scale;
+    __m128 v_alpha;
+    __m128i v_zero;
+    bool haveSIMD;
+    #endif
+};
+
+#undef clip
+
+/////////////
+
+
+TEST(ImgProc_Color, LabCheckWorking)
+{
+    cv::setUseOptimized(false);
+
+    //check copied code
+    bool toBgr = false;
+
+    enableTetraInterpolation = true;
+    interType = LAB_INTER_TETRA_FLOAT_XYZ;
+    Lab2RGB_f interToBgr(3, 0, 0, 0, true);
+    RGB2Lab_f interToLab(3, 0, 0, 0, true);
+    enableTetraInterpolation = false;
+    Lab2RGB_f goldToBgr(3, 0, 0, 0, true);
+    RGB2Lab_f goldToLab(3, 0, 0, 0, true);
+
+    char bgrChannels[3] = {'b', 'g', 'r'};
+    char labChannels[3] = {'l', 'a', 'b'};
+    char* channel = toBgr ? bgrChannels : labChannels;
+
+    string dir = "/home/savuor/logs/ocv/lab_precision/" + string(toBgr ? "lab2bgr/" : "rgb2lab/");
+
+    const size_t pSize = 256+1;
+    Mat  mGold(pSize, pSize, CV_32FC3);
+    Mat   mSrc(pSize, pSize, CV_32FC3);
+    Mat mInter(pSize, pSize, CV_32FC3);
+    Mat   mBackGold(pSize, pSize, CV_32FC3);
+    Mat  mBackInter(pSize, pSize, CV_32FC3);
+
+    Scalar vmean, vdev;
+    std::vector<Mat> chDiff, chInter;
+    double vmin[3], vmax[3]; Point minPt[3], maxPt[3];
+    double maxMaxError[4] = {-100, -100, -100, -100};
+
+    int blue = 256, l = 0;
+    for(blue = 0; blue < 256+1; blue++)
+    //for(; l < 100+1; l++)
+    {
+        for(size_t p = 0; p < pSize; p++)
+        {
+            float* pRow = mSrc.ptr<float>(p);
+            for(size_t q = 0; q < pSize; q++)
+            {
+                if(toBgr)
+                {
+                    //Lab
+                    pRow[3*q + 0] = 1.0f*l;
+                    pRow[3*q + 1] = 256.0f*q/(pSize-1)-128.0f;
+                    pRow[3*q + 2] = 256.0f*p/(pSize-1)-128.0f;
+                }
+                else
+                {
+                    //BGR
+                    pRow[3*q + 0] = 1.0f*blue/(pSize-1);
+                    pRow[3*q + 1] = 1.0f*q/(pSize-1);
+                    pRow[3*q + 2] = 1.0f*p/(pSize-1);
+                }
+            }
+        }
+
+        for(size_t p = 0; p < pSize; p++)
+        {
+            float* pSrc   =   mSrc.ptr<float>(p);
+            float* pGold  =  mGold.ptr<float>(p);
+            float* pInter = mInter.ptr<float>(p);
+            float* pBackGold  = mBackGold.ptr<float>(p);
+            float* pBackInter = mBackInter.ptr<float>(p);
+            if(toBgr)
+            {
+                interToBgr(pSrc, pInter, pSize);
+                goldToBgr(pSrc, pGold, pSize);
+
+                interToLab(pInter, pBackInter, pSize);
+                goldToLab(pGold, pBackGold, pSize);
+            }
+            else
+            {
+                interToLab(pSrc, pInter, pSize);
+                goldToLab(pSrc, pGold, pSize);
+
+                interToBgr(pInter, pBackInter, pSize);
+                goldToBgr(pGold, pBackGold, pSize);
+            }
+        }
+
+        std::cout << (toBgr ? l : blue) << ":" << endl;
+
+        Mat diff = abs(mGold-mInter);
+        meanStdDev(diff, vmean, vdev);
+        std::cout << "absdiff: mean " << vmean << " stddev " << vdev << std::endl;
+        split(diff, chDiff);
+        split(mInter, chInter);
+        for(int c = 0; c < 3; c++)
+        {
+            minMaxLoc(chDiff[c], &vmin[c], &vmax[c],
+                      &minPt[c], &maxPt[c]);
+            std::cout << " ch "  << channel[c];
+            std::cout << " max " << vmax[c] << " at " << maxPt[c];
+            maxMaxError[0] = max(maxMaxError[0], vmax[c]);
+        }
+        std::cout << std::endl;
+
+        Mat backGoldDiff = abs(mBackGold - mSrc);
+        meanStdDev(backGoldDiff, vmean, vdev);
+        std::cout << "backGoldDiff: mean " << vmean << " stddev " << vdev << std::endl;
+        split(backGoldDiff, chDiff);
+        for(int c = 0; c < 3; c++)
+        {
+            minMaxLoc(chDiff[c], &vmin[c], &vmax[c],
+                      &minPt[c], &maxPt[c]);
+            std::cout << " ch "  << channel[c];
+            std::cout << " max " << vmax[c] << " at " << maxPt[c];
+            maxMaxError[1] = max(maxMaxError[1], vmax[c]);
+        }
+        std::cout << std::endl;
+
+        Mat backInterDiff = abs(mBackInter - mSrc);
+        meanStdDev(backInterDiff, vmean, vdev);
+        std::cout << "backInterDiff: mean " << vmean << " stddev " << vdev << std::endl;
+        split(backInterDiff, chDiff);
+        for(int c = 0; c < 3; c++)
+        {
+            minMaxLoc(chDiff[c], &vmin[c], &vmax[c],
+                      &minPt[c], &maxPt[c]);
+            std::cout << " ch "  << channel[c];
+            std::cout << " max " << vmax[c] << " at " << maxPt[c];
+            maxMaxError[2] = max(maxMaxError[2], vmax[c]);
+        }
+        std::cout << std::endl;
+
+        Mat backInterGoldDiff = abs(mBackInter - mBackGold);
+        meanStdDev(backInterGoldDiff, vmean, vdev);
+        std::cout << "backInterGoldDiff: mean " << vmean << " stddev " << vdev << std::endl;
+        split(backInterGoldDiff, chDiff);
+        for(int c = 0; c < 3; c++)
+        {
+            minMaxLoc(chDiff[c], &vmin[c], &vmax[c],
+                      &minPt[c], &maxPt[c]);
+            std::cout << " ch "  << channel[c];
+            std::cout << " max " << vmax[c] << " at " << maxPt[c];
+            maxMaxError[3] = max(maxMaxError[3], vmax[c]);
+        }
+        std::cout << std::endl;
+
+        imwrite(format((dir + "noInter%03d.png").c_str(),  (toBgr ? l : blue)), toBgr ? mGold*256 : mGold+128);
+        imwrite(format((dir + "useInter%03d.png").c_str(), (toBgr ? l : blue)), toBgr ? mInter*256 : mInter+128);
+        imwrite(format((dir + "red%03d.png").c_str(),      (toBgr ? l : blue)), toBgr ? chInter[2]*256 : chInter[1]+128);
+        imwrite(format((dir + "diff%03d.png").c_str(),     (toBgr ? l : blue)), toBgr ? (mGold-mInter)*256+128 : (mGold-mInter)+128);
+        imwrite(format((dir + "absdiff%03d.png").c_str(),  (toBgr ? l : blue)), toBgr ? abs(mGold-mInter)*256 : abs(mGold-mInter));
+        imwrite(format((dir + "backgolddiff%03d.png").c_str(),  (toBgr ? l : blue)), toBgr ? backGoldDiff+128 : backGoldDiff*256);
+        imwrite(format((dir + "backinterdiff%03d.png").c_str(), (toBgr ? l : blue)), toBgr ? backInterDiff+128 : backInterDiff*256);
+    }
+
+    std::cout << "max max channel errors: ";
+    for(int i = 0; i < 4; i++)
+    {
+        std::cout << maxMaxError[i] << " \t";
+    }
+    std::cout << std::endl;
+
+    //here goes garbage code
+
+    //lab2rgb
+
+    if(0)
+    {
+        Mat mil, mia, mib, mi, mo;
+        for(int l = 0; l <= 100; l++)
+        {
+            mi = cv::Mat(256, 256, CV_32FC3, Scalar(0));
+            for(int a = -128; a < 128; a++)
+            {
+                for(int b = -128; b < 128; b++)
+                {
+                    Vec3f& v = mi.at<Vec3f>(b+128, a+128);
+                    v[0] = l; v[1] = a; v[2] = b;
+                }
+            }
+            Mat bigger;
+//            resize(mi, bigger, Size(), 4.0, 4.0);
+//            mi = bigger;
+            int64 t1 = cv::getTickCount();
+            cvtColor(mi, mo, CV_Lab2BGR);
+            int64 t2 = cv::getTickCount();
+            std::cout << l << ": time: " << (t2-t1)/cv::getTickFrequency() << std::endl;
+            FileStorage fs(format("/home/savuor/logs/ocv/lab_precision/lab2bgr/useTetra%03d.yml", l), FileStorage::WRITE);
+            fs << "converted" << mo;
+            imwrite(format("/home/savuor/logs/ocv/lab_precision/lab2bgr/useTetra%03d.png", l), mo*256);
+        }
+    }
+
+    //rgb2lab
+    if(0)
+    {
+        Mat mil, mia, mib, mi, mo;
+        for(int r = 0; r < 256; r++)
+        {
+            mi = cv::Mat(256, 256, CV_32FC3, Scalar(0));
+            for(int g = 0; g < 256; g++)
+            {
+                for(int b = 0; b < 256; b++)
+                {
+                    Vec3f& v = mi.at<Vec3f>(b, g);
+                    v[0] = b/256.0; v[1] = g/256.0; v[2] = r/256.0;
+                }
+            }
+            Mat bigger;
+            //resize(mi, bigger, Size(), 4.0, 4.0);
+            //mi = bigger;
+            int64 t1 = cv::getTickCount();
+            cvtColor(mi, mo, CV_BGR2Lab);
+            int64 t2 = cv::getTickCount();
+            std::cout << r << ": time: " << (t2-t1)/cv::getTickFrequency() << std::endl;
+            FileStorage fs(format("/home/savuor/logs/ocv/lab_precision/rgb2lab/useTetra%03d.yml", r), FileStorage::WRITE);
+            fs << "converted" << mo;
+            imwrite(format("/home/savuor/logs/ocv/lab_precision/rgb2lab/useTetra%03d.png", r), (mo+128.0));
+        }
+    }
+
+    //compare
+
+    if(0)
+    {
+        for(int i = 0; i < 256; i++)
+        {
+            FileStorage  fsNo(format("/home/savuor/logs/ocv/lab_precision/rgb2lab/noTetra%03d.yml", i), FileStorage::READ);
+            FileStorage fsUse(format("/home/savuor/logs/ocv/lab_precision/rgb2lab/useTetra%03d.yml", i), FileStorage::READ);
+            Mat mno, muse;
+            fsNo["converted"] >> mno;
+            fsUse["converted"] >> muse;
+
+            Mat diff = abs(mno-muse);
+            Scalar vmean, vdev;
+            double vmin[3], vmax[3]; Point minPt[3], maxPt[3];
+            meanStdDev(diff, vmean, vdev);
+            std::cout << i << ": mean " << vmean << " stddev " << vdev;
+            std::vector<Mat> chDiff;
+            split(diff, chDiff);
+            for(int c = 0; c < 3; c++)
+            {
+                minMaxLoc(chDiff[c], &vmin[c], &vmax[c],
+                          &minPt[c], &maxPt[c]);
+                std::cout << " ch "  << c;
+                std::cout << " max " << vmax[c] << " at " << maxPt[c];
+            }
+            std::cout << std::endl;
+        }
+    }
+
+    // back and forth
+
+//    Mat mil, mia, mib, mi, mo;
+//    for(int l = 0; l < 100; l++)
+//    {
+//        mi = cv::Mat(256, 256, CV_32FC3, Scalar(0));
+//        for(int a = -128; a < 128; a++)
+//        {
+//            for(int b = -128; b < 128; b++)
+//            {
+//                Vec3f& v = mi.at<Vec3f>(b+128, a+128);
+//                v[0] = l; v[1] = a; v[2] = b;
+//            }
+//        }
+//        Mat bigger, back;
+//        resize(mi, bigger, Size(), 4.0, 4.0);
+
+//        cvtColor(bigger, mo, CV_Lab2BGR);
+//        cvtColor(mo, back, CV_BGR2Lab);
+
+//        Mat diff = abs(bigger-back);
+//        Scalar vmean, vdev;
+//        double vmin[3], vmax[3]; Point minPt[3], maxPt[3];
+//        meanStdDev(diff, vmean, vdev);
+//        std::cout << l << ": mean " << vmean << " stddev " << vdev;
+//        std::vector<Mat> chDiff;
+//        split(diff, chDiff);
+//        for(int c = 0; c < 3; c++)
+//        {
+//            minMaxLoc(chDiff[c], &vmin[c], &vmax[c],
+//                      &minPt[c], &maxPt[c]);
+//            std::cout << " ch "  << c;
+//            std::cout << " max " << vmax[c] << " at " << maxPt[c];
+//        }
+//        std::cout << std::endl;
+
+//        FileStorage fs(format("/home/savuor/logs/ocv/lab_precision/diff2way/diff%03d.yml", l), FileStorage::WRITE);
+//        fs << "diff" << diff;
+//        imwrite(format("/home/savuor/logs/ocv/lab_precision/diff2way/diff%03d.ppm", l), diff);
+//    }
+
+    // back and forth RGB
+    if(0)
+    {
+        Mat mil, mia, mib, mi, mo;
+        for(int r = 0; r < 256; r++)
+        {
+            mi = cv::Mat(256, 256, CV_32FC3, Scalar(0));
+            for(int g = 0; g < 256; g++)
+            {
+                for(int b = 0; b < 256; b++)
+                {
+                    Vec3f& v = mi.at<Vec3f>(b, g);
+                    v[0] = b/256.0; v[1] = g/256.0; v[2] = r/256.0;
+                }
+            }
+            Mat bigger, back;
+            resize(mi, bigger, Size(), 4.0, 4.0);
+            mi = bigger;
+            int64 t1 = cv::getTickCount();
+            cvtColor(mi, mo, CV_BGR2Lab);
+            cvtColor(mo, back, CV_Lab2BGR);
+            int64 t2 = cv::getTickCount();
+            std::cout << r << ": time: " << (t2-t1)/cv::getTickFrequency() << std::endl;
+
+            Mat diff = abs(mi-back);
+            Scalar vmean, vdev;
+            double vmin[3], vmax[3]; Point minPt[3], maxPt[3];
+            meanStdDev(diff, vmean, vdev);
+            std::cout << r << ": mean " << vmean << " stddev " << vdev;
+            std::vector<Mat> chDiff;
+            split(diff, chDiff);
+            for(int c = 0; c < 3; c++)
+            {
+                minMaxLoc(chDiff[c], &vmin[c], &vmax[c],
+                          &minPt[c], &maxPt[c]);
+                std::cout << " ch "  << c;
+                std::cout << " max " << vmax[c] << " at " << maxPt[c];
+            }
+            std::cout << std::endl;
+
+            FileStorage fs(format("/home/savuor/logs/ocv/lab_precision/diff2way/diff%03d.yml", r), FileStorage::WRITE);
+            fs << "diff" << diff;
+            imwrite(format("/home/savuor/logs/ocv/lab_precision/diff2way/diff%03d.png", r), diff*256.0);
+            imwrite(format("/home/savuor/logs/ocv/lab_precision/diff2way/orig%03d.png", r), mi*256.0);
+            imwrite(format("/home/savuor/logs/ocv/lab_precision/diff2way/back%03d.png", r), back*256.0);
+            imwrite(format("/home/savuor/logs/ocv/lab_precision/diff2way/lab%03d.png", r), mo);
+        }
+    }
 }
