@@ -2383,7 +2383,7 @@ static ushort LabCbrtTab_b[LAB_CBRT_TAB_SIZE_B];
 static bool enableTetraInterpolation = true;
 enum
 {
-    lab_lut_shift = 6,
+    lab_lut_shift = 4,
     LAB_LUT_DIM = (1 << lab_lut_shift)+1,
     lab_base_shift = 14,
     LAB_BASE = (1 << lab_base_shift),
@@ -2520,12 +2520,13 @@ static void initLabTabs()
 
                         float x = fxz[0], z = fxz[1];
 
-                        Lab2XYZLUT_i32[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r]     = cvRound(LAB_BASE*x);
+                        //Lab(full range) => XYZ: x: [-0.0328753, 1.98139] y: [0, 1] z: [-0.0821883, 4.41094]
+                        Lab2XYZLUT_i32[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r]     = cvRound(LAB_BASE*(x+0.1f)/2.1f);
                         Lab2XYZLUT_i32[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 1] = cvRound(LAB_BASE*y);
-                        Lab2XYZLUT_i32[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 2] = cvRound(LAB_BASE*z);
-                        Lab2XYZLUT_f[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r]     = x;
+                        Lab2XYZLUT_i32[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 2] = cvRound(LAB_BASE*(z+0.1f)/4.5f);
+                        Lab2XYZLUT_f[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r]     = (x+0.1f)/2.1f;
                         Lab2XYZLUT_f[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 1] = y;
-                        Lab2XYZLUT_f[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 2] = z;
+                        Lab2XYZLUT_f[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 2] = (z+0.1f)/4.5f;
 
                         float ro = C0 * x + C1 * y + C2 * z;
                         float go = C3 * x + C4 * y + C5 * z;
@@ -3097,6 +3098,7 @@ enum InterType
 {
     LAB_INTER_TETRA, LAB_INTER_NO, LAB_INTER_TRILINEAR,
     LAB_INTER_TRILINEAR_FLOAT, LAB_INTER_TRILINEAR_FLOAT_XYZ, LAB_INTER_TETRA_FLOAT, LAB_INTER_TETRA_FLOAT_XYZ,
+    LAB_INTER_TETRA_XYZ, LAB_INTER_TRILINEAR_XYZ,
     LAB_INTER_TRILINEAR_SMOOTHSTEP, LAB_INTER_TRICUBIC
 };
 static InterType interType = LAB_INTER_NO;
@@ -3127,6 +3129,20 @@ static inline void chooseInterpolate(float cx, float cy, float cz, Cvt_Type type
         isFloat = true;
         trilinearFloatInterpolate(fcx, fcy, fcz, fLUT, fa, fb, fc);
         break;
+    case LAB_INTER_TRILINEAR_FLOAT_XYZ:
+        isFloat = true;
+        fLUT = type == LAB_TO_RGB ? Lab2XYZLUT_f : XYZ2LabLUT_f;
+        trilinearFloatInterpolate(fcx, fcy, fcz, fLUT, fa, fb, fc);
+        break;
+    case LAB_INTER_TRILINEAR_XYZ:
+        isFloat = false;
+        iLUT = type == LAB_TO_RGB ? Lab2XYZLUT_i32 : XYZ2LabLUT_i32;
+        trilinearInterpolate(icx, icy, icz, iLUT, ia, ib, ic);
+        break;
+    case LAB_INTER_TRILINEAR_SMOOTHSTEP:
+        isFloat = false;
+        trilinearFloatSmoothstepInterpolate(icx, icy, icz, iLUT, ia, ib, ic);
+        break;
     case LAB_INTER_TETRA_FLOAT:
         isFloat = true;
         tetraFloatInterpolate(fcx, fcy, fcz, fLUT, fa, fb, fc);
@@ -3136,14 +3152,10 @@ static inline void chooseInterpolate(float cx, float cy, float cz, Cvt_Type type
         fLUT = type == LAB_TO_RGB ? Lab2XYZLUT_f : XYZ2LabLUT_f;
         tetraFloatInterpolate(fcx, fcy, fcz, fLUT, fa, fb, fc);
         break;
-    case LAB_INTER_TRILINEAR_FLOAT_XYZ:
-        isFloat = true;
-        fLUT = type == LAB_TO_RGB ? Lab2XYZLUT_f : XYZ2LabLUT_f;
-        trilinearFloatInterpolate(fcx, fcy, fcz, fLUT, fa, fb, fc);
-        break;
-    case LAB_INTER_TRILINEAR_SMOOTHSTEP:
+    case LAB_INTER_TETRA_XYZ:
         isFloat = false;
-        trilinearFloatSmoothstepInterpolate(icx, icy, icz, iLUT, ia, ib, ic);
+        iLUT = type == LAB_TO_RGB ? Lab2XYZLUT_i32 : XYZ2LabLUT_i32;
+        tetraInterpolate(icx, icy, icz, iLUT, ia, ib, ic);
         break;
     case LAB_INTER_TRICUBIC:
         isFloat = false;
@@ -3424,7 +3436,8 @@ struct Lab2RGB_f
 
                 if(interType == LAB_INTER_TRILINEAR_FLOAT_XYZ || interType == LAB_INTER_TETRA_FLOAT_XYZ)
                 {
-                    float x = ro, y = go, z = bo;
+                    //Lab(full range) => XYZ: x: [-0.0328753, 1.98139] y: [0, 1] z: [-0.0821883, 4.41094]
+                    float x = ro*2.1f-0.1f, y = go, z = bo*4.5f-0.1f;
                     ro = C0 * x + C1 * y + C2 * z;
                     go = C3 * x + C4 * y + C5 * z;
                     bo = C6 * x + C7 * y + C8 * z;
@@ -3874,16 +3887,26 @@ struct Lab2RGB_b
 
 /////////////
 
+#define SET_INTER(x) \
+    do\
+    {\
+        interType = (x);\
+        strIterType = #x;\
+    }\
+    while(0)
+
 
 TEST(ImgProc_Color, LabCheckWorking)
 {
     cv::setUseOptimized(false);
 
-    //check copied code
-    bool toBgr = false;
+    std::string strIterType;
+
+    //settings
+    #define TO_BGR 1
+    SET_INTER(LAB_INTER_TETRA_FLOAT_XYZ);
 
     enableTetraInterpolation = true;
-    interType = LAB_INTER_TETRA_FLOAT_XYZ;
     Lab2RGB_f interToBgr(3, 0, 0, 0, true);
     RGB2Lab_f interToLab(3, 0, 0, 0, true);
     enableTetraInterpolation = false;
@@ -3892,9 +3915,9 @@ TEST(ImgProc_Color, LabCheckWorking)
 
     char bgrChannels[3] = {'b', 'g', 'r'};
     char labChannels[3] = {'l', 'a', 'b'};
-    char* channel = toBgr ? bgrChannels : labChannels;
+    char* channel = TO_BGR ? bgrChannels : labChannels;
 
-    string dir = "/home/savuor/logs/ocv/lab_precision/" + string(toBgr ? "lab2bgr/" : "rgb2lab/");
+    string dir = "/home/savuor/logs/ocv/lab_precision/" + string(TO_BGR ? "lab2bgr/" : "rgb2lab/");
 
     const size_t pSize = 256+1;
     Mat  mGold(pSize, pSize, CV_32FC3);
@@ -3909,15 +3932,18 @@ TEST(ImgProc_Color, LabCheckWorking)
     double maxMaxError[4] = {-100, -100, -100, -100};
 
     int blue = 256, l = 0;
+#if TO_BGR
+    for(; l < 100+1; l++)
+#else
     for(blue = 0; blue < 256+1; blue++)
-    //for(; l < 100+1; l++)
+#endif
     {
         for(size_t p = 0; p < pSize; p++)
         {
             float* pRow = mSrc.ptr<float>(p);
             for(size_t q = 0; q < pSize; q++)
             {
-                if(toBgr)
+                if(TO_BGR)
                 {
                     //Lab
                     pRow[3*q + 0] = 1.0f*l;
@@ -3941,7 +3967,7 @@ TEST(ImgProc_Color, LabCheckWorking)
             float* pInter = mInter.ptr<float>(p);
             float* pBackGold  = mBackGold.ptr<float>(p);
             float* pBackInter = mBackInter.ptr<float>(p);
-            if(toBgr)
+            if(TO_BGR)
             {
                 interToBgr(pSrc, pInter, pSize);
                 goldToBgr(pSrc, pGold, pSize);
@@ -3959,7 +3985,7 @@ TEST(ImgProc_Color, LabCheckWorking)
             }
         }
 
-        std::cout << (toBgr ? l : blue) << ":" << endl;
+        std::cout << (TO_BGR ? l : blue) << ":" << endl;
 
         Mat diff = abs(mGold-mInter);
         meanStdDev(diff, vmean, vdev);
@@ -4018,15 +4044,17 @@ TEST(ImgProc_Color, LabCheckWorking)
         }
         std::cout << std::endl;
 
-        imwrite(format((dir + "noInter%03d.png").c_str(),  (toBgr ? l : blue)), toBgr ? mGold*256 : mGold+128);
-        imwrite(format((dir + "useInter%03d.png").c_str(), (toBgr ? l : blue)), toBgr ? mInter*256 : mInter+128);
-        imwrite(format((dir + "red%03d.png").c_str(),      (toBgr ? l : blue)), toBgr ? chInter[2]*256 : chInter[1]+128);
-        imwrite(format((dir + "diff%03d.png").c_str(),     (toBgr ? l : blue)), toBgr ? (mGold-mInter)*256+128 : (mGold-mInter)+128);
-        imwrite(format((dir + "absdiff%03d.png").c_str(),  (toBgr ? l : blue)), toBgr ? abs(mGold-mInter)*256 : abs(mGold-mInter));
-        imwrite(format((dir + "backgolddiff%03d.png").c_str(),  (toBgr ? l : blue)), toBgr ? backGoldDiff+128 : backGoldDiff*256);
-        imwrite(format((dir + "backinterdiff%03d.png").c_str(), (toBgr ? l : blue)), toBgr ? backInterDiff+128 : backInterDiff*256);
+        imwrite(format((dir + "noInter%03d.png").c_str(),  (TO_BGR ? l : blue)), TO_BGR ? mGold*256 : mGold+128);
+        imwrite(format((dir + "useInter%03d.png").c_str(), (TO_BGR ? l : blue)), TO_BGR ? mInter*256 : mInter+128);
+        imwrite(format((dir + "red%03d.png").c_str(),      (TO_BGR ? l : blue)), TO_BGR ? chInter[2]*256 : chInter[1]+128);
+        imwrite(format((dir + "diff%03d.png").c_str(),     (TO_BGR ? l : blue)), TO_BGR ? (mGold-mInter)*256+128 : (mGold-mInter)+128);
+        imwrite(format((dir + "absdiff%03d.png").c_str(),  (TO_BGR ? l : blue)), TO_BGR ? abs(mGold-mInter)*256 : abs(mGold-mInter));
+        imwrite(format((dir + "backgolddiff%03d.png").c_str(),  (TO_BGR ? l : blue)), TO_BGR ? backGoldDiff+128 : backGoldDiff*256);
+        imwrite(format((dir + "backinterdiff%03d.png").c_str(), (TO_BGR ? l : blue)), TO_BGR ? backInterDiff+128 : backInterDiff*256);
     }
 
+    std::cout << (TO_BGR ? "Lab2RGB" : "RGB2Lab") << " ";
+    std::cout << "LUT shift " << lab_lut_shift << " " << strIterType << " ";
     std::cout << "max max channel errors: ";
     for(int i = 0; i < 4; i++)
     {
@@ -4034,182 +4062,5 @@ TEST(ImgProc_Color, LabCheckWorking)
     }
     std::cout << std::endl;
 
-    //here goes garbage code
-
-    //lab2rgb
-
-    if(0)
-    {
-        Mat mil, mia, mib, mi, mo;
-        for(int l = 0; l <= 100; l++)
-        {
-            mi = cv::Mat(256, 256, CV_32FC3, Scalar(0));
-            for(int a = -128; a < 128; a++)
-            {
-                for(int b = -128; b < 128; b++)
-                {
-                    Vec3f& v = mi.at<Vec3f>(b+128, a+128);
-                    v[0] = l; v[1] = a; v[2] = b;
-                }
-            }
-            Mat bigger;
-//            resize(mi, bigger, Size(), 4.0, 4.0);
-//            mi = bigger;
-            int64 t1 = cv::getTickCount();
-            cvtColor(mi, mo, CV_Lab2BGR);
-            int64 t2 = cv::getTickCount();
-            std::cout << l << ": time: " << (t2-t1)/cv::getTickFrequency() << std::endl;
-            FileStorage fs(format("/home/savuor/logs/ocv/lab_precision/lab2bgr/useTetra%03d.yml", l), FileStorage::WRITE);
-            fs << "converted" << mo;
-            imwrite(format("/home/savuor/logs/ocv/lab_precision/lab2bgr/useTetra%03d.png", l), mo*256);
-        }
-    }
-
-    //rgb2lab
-    if(0)
-    {
-        Mat mil, mia, mib, mi, mo;
-        for(int r = 0; r < 256; r++)
-        {
-            mi = cv::Mat(256, 256, CV_32FC3, Scalar(0));
-            for(int g = 0; g < 256; g++)
-            {
-                for(int b = 0; b < 256; b++)
-                {
-                    Vec3f& v = mi.at<Vec3f>(b, g);
-                    v[0] = b/256.0; v[1] = g/256.0; v[2] = r/256.0;
-                }
-            }
-            Mat bigger;
-            //resize(mi, bigger, Size(), 4.0, 4.0);
-            //mi = bigger;
-            int64 t1 = cv::getTickCount();
-            cvtColor(mi, mo, CV_BGR2Lab);
-            int64 t2 = cv::getTickCount();
-            std::cout << r << ": time: " << (t2-t1)/cv::getTickFrequency() << std::endl;
-            FileStorage fs(format("/home/savuor/logs/ocv/lab_precision/rgb2lab/useTetra%03d.yml", r), FileStorage::WRITE);
-            fs << "converted" << mo;
-            imwrite(format("/home/savuor/logs/ocv/lab_precision/rgb2lab/useTetra%03d.png", r), (mo+128.0));
-        }
-    }
-
-    //compare
-
-    if(0)
-    {
-        for(int i = 0; i < 256; i++)
-        {
-            FileStorage  fsNo(format("/home/savuor/logs/ocv/lab_precision/rgb2lab/noTetra%03d.yml", i), FileStorage::READ);
-            FileStorage fsUse(format("/home/savuor/logs/ocv/lab_precision/rgb2lab/useTetra%03d.yml", i), FileStorage::READ);
-            Mat mno, muse;
-            fsNo["converted"] >> mno;
-            fsUse["converted"] >> muse;
-
-            Mat diff = abs(mno-muse);
-            Scalar vmean, vdev;
-            double vmin[3], vmax[3]; Point minPt[3], maxPt[3];
-            meanStdDev(diff, vmean, vdev);
-            std::cout << i << ": mean " << vmean << " stddev " << vdev;
-            std::vector<Mat> chDiff;
-            split(diff, chDiff);
-            for(int c = 0; c < 3; c++)
-            {
-                minMaxLoc(chDiff[c], &vmin[c], &vmax[c],
-                          &minPt[c], &maxPt[c]);
-                std::cout << " ch "  << c;
-                std::cout << " max " << vmax[c] << " at " << maxPt[c];
-            }
-            std::cout << std::endl;
-        }
-    }
-
-    // back and forth
-
-//    Mat mil, mia, mib, mi, mo;
-//    for(int l = 0; l < 100; l++)
-//    {
-//        mi = cv::Mat(256, 256, CV_32FC3, Scalar(0));
-//        for(int a = -128; a < 128; a++)
-//        {
-//            for(int b = -128; b < 128; b++)
-//            {
-//                Vec3f& v = mi.at<Vec3f>(b+128, a+128);
-//                v[0] = l; v[1] = a; v[2] = b;
-//            }
-//        }
-//        Mat bigger, back;
-//        resize(mi, bigger, Size(), 4.0, 4.0);
-
-//        cvtColor(bigger, mo, CV_Lab2BGR);
-//        cvtColor(mo, back, CV_BGR2Lab);
-
-//        Mat diff = abs(bigger-back);
-//        Scalar vmean, vdev;
-//        double vmin[3], vmax[3]; Point minPt[3], maxPt[3];
-//        meanStdDev(diff, vmean, vdev);
-//        std::cout << l << ": mean " << vmean << " stddev " << vdev;
-//        std::vector<Mat> chDiff;
-//        split(diff, chDiff);
-//        for(int c = 0; c < 3; c++)
-//        {
-//            minMaxLoc(chDiff[c], &vmin[c], &vmax[c],
-//                      &minPt[c], &maxPt[c]);
-//            std::cout << " ch "  << c;
-//            std::cout << " max " << vmax[c] << " at " << maxPt[c];
-//        }
-//        std::cout << std::endl;
-
-//        FileStorage fs(format("/home/savuor/logs/ocv/lab_precision/diff2way/diff%03d.yml", l), FileStorage::WRITE);
-//        fs << "diff" << diff;
-//        imwrite(format("/home/savuor/logs/ocv/lab_precision/diff2way/diff%03d.ppm", l), diff);
-//    }
-
-    // back and forth RGB
-    if(0)
-    {
-        Mat mil, mia, mib, mi, mo;
-        for(int r = 0; r < 256; r++)
-        {
-            mi = cv::Mat(256, 256, CV_32FC3, Scalar(0));
-            for(int g = 0; g < 256; g++)
-            {
-                for(int b = 0; b < 256; b++)
-                {
-                    Vec3f& v = mi.at<Vec3f>(b, g);
-                    v[0] = b/256.0; v[1] = g/256.0; v[2] = r/256.0;
-                }
-            }
-            Mat bigger, back;
-            resize(mi, bigger, Size(), 4.0, 4.0);
-            mi = bigger;
-            int64 t1 = cv::getTickCount();
-            cvtColor(mi, mo, CV_BGR2Lab);
-            cvtColor(mo, back, CV_Lab2BGR);
-            int64 t2 = cv::getTickCount();
-            std::cout << r << ": time: " << (t2-t1)/cv::getTickFrequency() << std::endl;
-
-            Mat diff = abs(mi-back);
-            Scalar vmean, vdev;
-            double vmin[3], vmax[3]; Point minPt[3], maxPt[3];
-            meanStdDev(diff, vmean, vdev);
-            std::cout << r << ": mean " << vmean << " stddev " << vdev;
-            std::vector<Mat> chDiff;
-            split(diff, chDiff);
-            for(int c = 0; c < 3; c++)
-            {
-                minMaxLoc(chDiff[c], &vmin[c], &vmax[c],
-                          &minPt[c], &maxPt[c]);
-                std::cout << " ch "  << c;
-                std::cout << " max " << vmax[c] << " at " << maxPt[c];
-            }
-            std::cout << std::endl;
-
-            FileStorage fs(format("/home/savuor/logs/ocv/lab_precision/diff2way/diff%03d.yml", r), FileStorage::WRITE);
-            fs << "diff" << diff;
-            imwrite(format("/home/savuor/logs/ocv/lab_precision/diff2way/diff%03d.png", r), diff*256.0);
-            imwrite(format("/home/savuor/logs/ocv/lab_precision/diff2way/orig%03d.png", r), mi*256.0);
-            imwrite(format("/home/savuor/logs/ocv/lab_precision/diff2way/back%03d.png", r), back*256.0);
-            imwrite(format("/home/savuor/logs/ocv/lab_precision/diff2way/lab%03d.png", r), mo);
-        }
-    }
+#undef SET_INTER
 }
