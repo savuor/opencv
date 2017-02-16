@@ -2911,67 +2911,6 @@ static inline void trilinearInterpolate(int cx, int cy, int cz, int* LUT,
     c = CV_DESCALE(c, trilinear_shift*3);
 }
 
-static inline void trilinearFloatSmoothstepInterpolate(int cx, int cy, int cz, int* LUT,
-                                                       int& a, int& b, int& c)
-{
-    cx = (cx >= 0) ? (cx <= LAB_BASE ? cx : LAB_BASE) : 0;
-    cy = (cy >= 0) ? (cy <= LAB_BASE ? cy : LAB_BASE) : 0;
-    cz = (cz >= 0) ? (cz <= LAB_BASE ? cz : LAB_BASE) : 0;
-
-    //LUT idx of origin pt of cube
-    int tx = cx >> (lab_base_shift - lab_lut_shift);
-    int ty = cy >> (lab_base_shift - lab_lut_shift);
-    int tz = cz >> (lab_base_shift - lab_lut_shift);
-
-    //x, y, z are [0; 1)
-    float x = 1.0f*((cx - (tx << (lab_base_shift - lab_lut_shift))) << lab_lut_shift)/LAB_BASE;
-    float y = 1.0f*((cy - (ty << (lab_base_shift - lab_lut_shift))) << lab_lut_shift)/LAB_BASE;
-    float z = 1.0f*((cz - (tz << (lab_base_shift - lab_lut_shift))) << lab_lut_shift)/LAB_BASE;
-
-    //smoothstepping
-    x = x * x * (3.0 - 2.0 * x);
-    y = y * y * (3.0 - 2.0 * y);
-    z = z * z * (3.0 - 2.0 * z);
-
-    float w[8];
-    int aa[8], bb[8], cc[8];
-
-#define SETPT(n, _x, _y, _z) \
-    do\
-    {\
-        w[n]  = (_x) ? x : (1.0f - x);\
-        w[n] *= (_y) ? y : (1.0f - y);\
-        w[n] *= (_z) ? z : (1.0f - z);\
-        aa[n] = bb[n] = cc[n] = 0;\
-        if(abs(w[n]) > FLT_EPSILON)\
-        {\
-            (aa[n]) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z))];\
-            (bb[n]) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 1];\
-            (cc[n]) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 2];\
-        }\
-    }\
-    while(0)
-
-    SETPT(0, 0, 0, 0);
-    SETPT(1, 0, 0, 1);
-    SETPT(2, 0, 1, 0);
-    SETPT(3, 0, 1, 1);
-    SETPT(4, 1, 0, 0);
-    SETPT(5, 1, 0, 1);
-    SETPT(6, 1, 1, 0);
-    SETPT(7, 1, 1, 1);
-
-#undef SETPT
-
-    a = b = c = 0;
-    for(int i = 0; i < 8; i++)
-    {
-        a += aa[i]*w[i];
-        b += bb[i]*w[i];
-        c += cc[i]*w[i];
-    }
-}
-
 
 static inline void trilinearFloatInterpolate(float cx, float cy, float cz, float* LUT,
                                              float& a, float& b, float& c)
@@ -3029,87 +2968,33 @@ static inline void trilinearFloatInterpolate(float cx, float cy, float cz, float
     }
 }
 
-double cubicInterpolate (double p[4], double x)
-{
-return p[1] + 0.5 * x*(p[2] - p[0] + x*(2.0*p[0] - 5.0*p[1] + 4.0*p[2] - p[3] + x*(3.0*(p[1] - p[2]) + p[3] - p[0])));
-}
-
-double bicubicInterpolate (double p[4][4], double x, double y)
-{
-    double arr[4];
-    arr[0] = cubicInterpolate(p[0], y);
-    arr[1] = cubicInterpolate(p[1], y);
-    arr[2] = cubicInterpolate(p[2], y);
-    arr[3] = cubicInterpolate(p[3], y);
-    return cubicInterpolate(arr, x);
-}
-
-double tricubicInterpolate (double p[4][4][4], double x, double y, double z)
-{
-    double arr[4];
-    arr[0] = bicubicInterpolate(p[0], y, z);
-    arr[1] = bicubicInterpolate(p[1], y, z);
-    arr[2] = bicubicInterpolate(p[2], y, z);
-    arr[3] = bicubicInterpolate(p[3], y, z);
-    return cubicInterpolate(arr, x);
-}
-
-static inline void tricubicSlowInterpolate(int cx, int cy, int cz, int* LUT,
-                                           int& a, int& b, int& c)
-{
-    cx = (cx >= 0) ? (cx <= LAB_BASE ? cx : LAB_BASE) : 0;
-    cy = (cy >= 0) ? (cy <= LAB_BASE ? cy : LAB_BASE) : 0;
-    cz = (cz >= 0) ? (cz <= LAB_BASE ? cz : LAB_BASE) : 0;
-
-    //LUT idx of origin pt of cube
-    int tx = cx >> (lab_base_shift - lab_lut_shift);
-    int ty = cy >> (lab_base_shift - lab_lut_shift);
-    int tz = cz >> (lab_base_shift - lab_lut_shift);
-
-    //x, y, z are [0; 1)
-    float x = 1.0f*((cx - (tx << (lab_base_shift - lab_lut_shift))) << lab_lut_shift)/LAB_BASE;
-    float y = 1.0f*((cy - (ty << (lab_base_shift - lab_lut_shift))) << lab_lut_shift)/LAB_BASE;
-    float z = 1.0f*((cz - (tz << (lab_base_shift - lab_lut_shift))) << lab_lut_shift)/LAB_BASE;
-
-    double aa[4][4][4], bb[4][4][4], cc[4][4][4];
-
-#define clamp(v) ((v) > LAB_LUT_DIM ? LAB_LUT_DIM : ((v) < 0 ? 0 : (v)))
-    for(int xx = -1; xx < 3; xx++)
-    {
-        for(int yy = -1; yy < 3; yy++)
-        {
-            for(int zz = -1; zz < 3; zz++)
-            {
-                aa[xx+1][yy+1][zz+1] = LUT[3*clamp(tx+xx) + 3*LAB_LUT_DIM*clamp(ty+yy) + 3*LAB_LUT_DIM*LAB_LUT_DIM*clamp(tz+zz) + 0];
-                bb[xx+1][yy+1][zz+1] = LUT[3*clamp(tx+xx) + 3*LAB_LUT_DIM*clamp(ty+yy) + 3*LAB_LUT_DIM*LAB_LUT_DIM*clamp(tz+zz) + 1];
-                cc[xx+1][yy+1][zz+1] = LUT[3*clamp(tx+xx) + 3*LAB_LUT_DIM*clamp(ty+yy) + 3*LAB_LUT_DIM*LAB_LUT_DIM*clamp(tz+zz) + 2];
-            }
-        }
-    }
-
-#undef clamp
-
-    a = tricubicInterpolate(aa, x, y, z);
-    b = tricubicInterpolate(bb, x, y, z);
-    c = tricubicInterpolate(cc, x, y, z);
-}
 
 enum InterType
 {
-    LAB_INTER_TETRA, LAB_INTER_NO, LAB_INTER_TRILINEAR,
-    LAB_INTER_TRILINEAR_FLOAT, LAB_INTER_TRILINEAR_FLOAT_XYZ, LAB_INTER_TETRA_FLOAT, LAB_INTER_TETRA_FLOAT_XYZ,
-    LAB_INTER_TETRA_XYZ, LAB_INTER_TRILINEAR_XYZ,
-    LAB_INTER_TRILINEAR_SMOOTHSTEP, LAB_INTER_TRICUBIC
+    LAB_INTER_NO,
+    LAB_INTER_TETRA,
+    LAB_INTER_TRILINEAR,
 };
 static InterType interType = LAB_INTER_NO;
+static bool useXYZTable = false;
+static bool useFloatVersion = true;
 
 static inline void chooseInterpolate(float cx, float cy, float cz, Cvt_Type type,
                                      float& a, float& b, float& c)
 {
     int ia, ib, ic, icx = cx*LAB_BASE, icy = cy*LAB_BASE, icz = cz*LAB_BASE;
     float fa, fb, fc, fcx = cx, fcy = cy, fcz = cz;
-    float* fLUT = type == LAB_TO_RGB ? Lab2RGBLUT_f : RGB2LabLUT_f;
-    int*   iLUT = type == LAB_TO_RGB ? Lab2RGBLUT_i32 : RGB2LabLUT_i32;
+    float* fLUT; int*   iLUT;
+    if(useXYZTable)
+    {
+        fLUT = type == LAB_TO_RGB ? Lab2XYZLUT_f : XYZ2LabLUT_f;
+        iLUT = type == LAB_TO_RGB ? Lab2XYZLUT_i32 : XYZ2LabLUT_i32;
+    }
+    else
+    {
+        fLUT = type == LAB_TO_RGB ? Lab2RGBLUT_f : RGB2LabLUT_f;
+        iLUT = type == LAB_TO_RGB ? Lab2RGBLUT_i32 : RGB2LabLUT_i32;
+    }
     bool isFloat = false;
     switch (interType)
     {
@@ -3118,48 +3003,26 @@ static inline void chooseInterpolate(float cx, float cy, float cz, Cvt_Type type
         noInterpolate(icx, icy, icz, iLUT, ia, ib, ic);
         break;
     case LAB_INTER_TETRA:
-        isFloat = false;
-        tetraInterpolate(icx, icy, icz, iLUT, ia, ib, ic);
+        if(useFloatVersion)
+        {
+            tetraFloatInterpolate(fcx, fcy, fcz, fLUT, fa, fb, fc);
+        }
+        else
+        {
+            tetraInterpolate(icx, icy, icz, iLUT, ia, ib, ic);
+        }
+        isFloat = useFloatVersion;
         break;
     case LAB_INTER_TRILINEAR:
-        isFloat = false;
-        trilinearInterpolate(icx, icy, icz, iLUT, ia, ib, ic);
-        break;
-    case LAB_INTER_TRILINEAR_FLOAT:
-        isFloat = true;
-        trilinearFloatInterpolate(fcx, fcy, fcz, fLUT, fa, fb, fc);
-        break;
-    case LAB_INTER_TRILINEAR_FLOAT_XYZ:
-        isFloat = true;
-        fLUT = type == LAB_TO_RGB ? Lab2XYZLUT_f : XYZ2LabLUT_f;
-        trilinearFloatInterpolate(fcx, fcy, fcz, fLUT, fa, fb, fc);
-        break;
-    case LAB_INTER_TRILINEAR_XYZ:
-        isFloat = false;
-        iLUT = type == LAB_TO_RGB ? Lab2XYZLUT_i32 : XYZ2LabLUT_i32;
-        trilinearInterpolate(icx, icy, icz, iLUT, ia, ib, ic);
-        break;
-    case LAB_INTER_TRILINEAR_SMOOTHSTEP:
-        isFloat = false;
-        trilinearFloatSmoothstepInterpolate(icx, icy, icz, iLUT, ia, ib, ic);
-        break;
-    case LAB_INTER_TETRA_FLOAT:
-        isFloat = true;
-        tetraFloatInterpolate(fcx, fcy, fcz, fLUT, fa, fb, fc);
-        break;
-    case LAB_INTER_TETRA_FLOAT_XYZ:
-        isFloat = true;
-        fLUT = type == LAB_TO_RGB ? Lab2XYZLUT_f : XYZ2LabLUT_f;
-        tetraFloatInterpolate(fcx, fcy, fcz, fLUT, fa, fb, fc);
-        break;
-    case LAB_INTER_TETRA_XYZ:
-        isFloat = false;
-        iLUT = type == LAB_TO_RGB ? Lab2XYZLUT_i32 : XYZ2LabLUT_i32;
-        tetraInterpolate(icx, icy, icz, iLUT, ia, ib, ic);
-        break;
-    case LAB_INTER_TRICUBIC:
-        isFloat = false;
-        tricubicSlowInterpolate(icx, icy, icz, iLUT, ia, ib, ic);
+        if(useFloatVersion)
+        {
+            trilinearFloatInterpolate(fcx, fcy, fcz, fLUT, fa, fb, fc);
+        }
+        else
+        {
+            trilinearInterpolate(icx, icy, icz, iLUT, ia, ib, ic);
+        }
+        isFloat = useFloatVersion;
         break;
     default:
         break;
@@ -3172,6 +3035,14 @@ static inline void chooseInterpolate(float cx, float cy, float cz, Cvt_Type type
     {
         a = ia*1.0f/LAB_BASE, b = ib*1.0f/LAB_BASE, c = ic*1.0f/LAB_BASE;
     }
+}
+
+
+static inline void chooseInterpolate(uchar cx, uchar cy, uchar cz, Cvt_Type type,
+                                     uchar& a, uchar& b, uchar& c)
+{
+    int ia, ib, ic, icx = cx << (lab_lut_shift - 8), icy = cy*LAB_BASE, icz = cz*LAB_BASE;
+    //TODO: implement it
 }
 
 
@@ -3226,7 +3097,7 @@ struct RGB2Lab_f
                 float G = clip(src[1]);
                 float B = clip(src[bIdx^2]);
 
-                if(interType == LAB_INTER_TRILINEAR_FLOAT_XYZ || interType == LAB_INTER_TETRA_FLOAT_XYZ)
+                if(useXYZTable)
                 {
                     if (gammaTab)
                     {
@@ -3434,7 +3305,7 @@ struct Lab2RGB_f
                 chooseInterpolate(li/100.0f, (ai+128.0f)/256.0f, (bi+128.0f)/256.0f,
                                   LAB_TO_RGB, ro, go, bo);
 
-                if(interType == LAB_INTER_TRILINEAR_FLOAT_XYZ || interType == LAB_INTER_TETRA_FLOAT_XYZ)
+                if(useXYZTable)
                 {
                     //Lab(full range) => XYZ: x: [-0.0328753, 1.98139] y: [0, 1] z: [-0.0821883, 4.41094]
                     float x = ro*2.1f-0.1f, y = go, z = bo*4.5f-0.1f;
@@ -3445,11 +3316,6 @@ struct Lab2RGB_f
                     go = clip(go);
                     bo = clip(bo);
 
-                    /*
-                    ro = applyInvGamma(ro);
-                    go = applyInvGamma(go);
-                    bo = applyInvGamma(bo);
-                    */
                     if (gammaTab)
                     {
                         ro = splineInterpolate(ro * gscale, gammaTab, GAMMA_TAB_SIZE);
@@ -3599,6 +3465,8 @@ struct RGB2Lab_b
         static volatile int _3 = 3;
         initLabTabs();
 
+        useTetraInterpolation = (!_coeffs && !_whitept && srgb && enableTetraInterpolation);
+
         if (!_coeffs)
             _coeffs = sRGB2XYZ_D65;
         if (!_whitept)
@@ -3653,6 +3521,7 @@ struct RGB2Lab_b
     int srccn;
     int coeffs[9];
     bool srgb;
+    bool useTetraInterpolation;
 };
 
 
@@ -3887,14 +3756,7 @@ struct Lab2RGB_b
 
 /////////////
 
-#define SET_INTER(x) \
-    do\
-    {\
-        interType = (x);\
-        strIterType = #x;\
-    }\
-    while(0)
-
+#define SET_INTER(x) interType = (x); strIterType = #x;
 
 TEST(ImgProc_Color, LabCheckWorking)
 {
@@ -3904,7 +3766,9 @@ TEST(ImgProc_Color, LabCheckWorking)
 
     //settings
     #define TO_BGR 1
-    SET_INTER(LAB_INTER_TETRA_FLOAT_XYZ);
+    SET_INTER(LAB_INTER_TRILINEAR);
+    useXYZTable = true;
+    useFloatVersion = false;
 
     enableTetraInterpolation = true;
     Lab2RGB_f interToBgr(3, 0, 0, 0, true);
@@ -4053,12 +3917,14 @@ TEST(ImgProc_Color, LabCheckWorking)
         imwrite(format((dir + "backinterdiff%03d.png").c_str(), (TO_BGR ? l : blue)), TO_BGR ? backInterDiff+128 : backInterDiff*256);
     }
 
-    std::cout << (TO_BGR ? "Lab2RGB" : "RGB2Lab") << " ";
-    std::cout << "LUT shift " << lab_lut_shift << " " << strIterType << " ";
-    std::cout << "max max channel errors: ";
+    //max-max channel errors
+    std::cout << std::endl << (TO_BGR ? "Lab2RGB" : "RGB2Lab") << " ";
+    std::cout << "lab_lut_shift " << lab_lut_shift << " ";
+    std::cout << strIterType << " " << (useXYZTable ? "+XYZ" : "-XYZ") << " ";
+    std::cout << (useFloatVersion ? "float" : "int") << ": ";
     for(int i = 0; i < 4; i++)
     {
-        std::cout << maxMaxError[i] << " \t";
+        std::cout << maxMaxError[i] << "\t";
     }
     std::cout << std::endl;
 
