@@ -2373,6 +2373,7 @@ static float sRGBGammaTab[GAMMA_TAB_SIZE*4], sRGBInvGammaTab[GAMMA_TAB_SIZE*4];
 static const float GammaTabScale = (float)GAMMA_TAB_SIZE;
 
 static ushort sRGBGammaTab_b[256], linearGammaTab_b[256];
+static ushort sRGBInvGammaTab_b[256], linearInvGammaTab_b[256];
 #undef lab_shift
 #define lab_shift xyz_shift
 #define gamma_shift 3
@@ -2383,7 +2384,7 @@ static ushort LabCbrtTab_b[LAB_CBRT_TAB_SIZE_B];
 static bool enableTetraInterpolation = true;
 enum
 {
-    lab_lut_shift = 4,
+    lab_lut_shift = 6,
     LAB_LUT_DIM = (1 << lab_lut_shift)+1,
     lab_base_shift = 14,
     LAB_BASE = (1 << lab_base_shift),
@@ -2441,8 +2442,10 @@ static void initLabTabs()
         for(i = 0; i < 256; i++)
         {
             float x = i*(1.f/255.f);
-            sRGBGammaTab_b[i] = saturate_cast<ushort>(255.f*(1 << gamma_shift)*(x <= 0.04045f ? x*(1.f/12.92f) : (float)std::pow((double)(x + 0.055)*(1./1.055), 2.4)));
+            sRGBGammaTab_b[i] = saturate_cast<ushort>(255.f*(1 << gamma_shift)*applyGamma(x));
             linearGammaTab_b[i] = (ushort)(i*(1 << gamma_shift));
+            sRGBInvGammaTab_b[i] = saturate_cast<ushort>(255.f*applyInvGamma(x));
+            linearInvGammaTab_b[i] = (ushort)(i);
         }
 
         for(i = 0; i < LAB_CBRT_TAB_SIZE_B; i++)
@@ -2521,9 +2524,9 @@ static void initLabTabs()
                         float x = fxz[0], z = fxz[1];
 
                         //Lab(full range) => XYZ: x: [-0.0328753, 1.98139] y: [0, 1] z: [-0.0821883, 4.41094]
-                        Lab2XYZLUT_i32[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r]     = cvRound(LAB_BASE*(x+0.1f)/2.1f);
+                        Lab2XYZLUT_i32[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r]     = cvRound(LAB_BASE*(x+0.125f)/2.5f);
                         Lab2XYZLUT_i32[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 1] = cvRound(LAB_BASE*y);
-                        Lab2XYZLUT_i32[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 2] = cvRound(LAB_BASE*(z+0.1f)/4.5f);
+                        Lab2XYZLUT_i32[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 2] = cvRound(LAB_BASE*(z+0.125f)/4.5f);
                         Lab2XYZLUT_f[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r]     = (x+0.1f)/2.1f;
                         Lab2XYZLUT_f[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 1] = y;
                         Lab2XYZLUT_f[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 2] = (z+0.1f)/4.5f;
@@ -2999,7 +3002,6 @@ static inline void chooseInterpolate(float cx, float cy, float cz, Cvt_Type type
     switch (interType)
     {
     case LAB_INTER_NO:
-        isFloat = false;
         noInterpolate(icx, icy, icz, iLUT, ia, ib, ic);
         break;
     case LAB_INTER_TETRA:
@@ -3038,11 +3040,62 @@ static inline void chooseInterpolate(float cx, float cy, float cz, Cvt_Type type
 }
 
 
-static inline void chooseInterpolate(uchar cx, uchar cy, uchar cz, Cvt_Type type,
-                                     uchar& a, uchar& b, uchar& c)
+static inline void chooseInterpolate(int cx, int cy, int cz, Cvt_Type type,
+                                     int& a, int& b, int& c)
 {
-    int ia, ib, ic, icx = cx << (lab_lut_shift - 8), icy = cy*LAB_BASE, icz = cz*LAB_BASE;
-    //TODO: implement it
+    int ia, ib, ic;
+    int icx = cx, icy = cy, icz = cz;
+    float fa, fb, fc, fcx = cx/255.0f, fcy = cy/255.0f, fcz = cz/255.0f;
+    float* fLUT; int*   iLUT;
+    if(useXYZTable)
+    {
+        fLUT = type == LAB_TO_RGB ? Lab2XYZLUT_f : XYZ2LabLUT_f;
+        iLUT = type == LAB_TO_RGB ? Lab2XYZLUT_i32 : XYZ2LabLUT_i32;
+    }
+    else
+    {
+        fLUT = type == LAB_TO_RGB ? Lab2RGBLUT_f : RGB2LabLUT_f;
+        iLUT = type == LAB_TO_RGB ? Lab2RGBLUT_i32 : RGB2LabLUT_i32;
+    }
+    bool isFloat = false;
+    switch (interType)
+    {
+    case LAB_INTER_NO:
+        noInterpolate(icx, icy, icz, iLUT, ia, ib, ic);
+        break;
+    case LAB_INTER_TETRA:
+        if(useFloatVersion)
+        {
+            tetraFloatInterpolate(fcx, fcy, fcz, fLUT, fa, fb, fc);
+        }
+        else
+        {
+            tetraInterpolate(icx, icy, icz, iLUT, ia, ib, ic);
+        }
+        isFloat = useFloatVersion;
+        break;
+    case LAB_INTER_TRILINEAR:
+        if(useFloatVersion)
+        {
+            trilinearFloatInterpolate(fcx, fcy, fcz, fLUT, fa, fb, fc);
+        }
+        else
+        {
+            trilinearInterpolate(icx, icy, icz, iLUT, ia, ib, ic);
+        }
+        isFloat = useFloatVersion;
+        break;
+    default:
+        break;
+    }
+    if(isFloat)
+    {
+        a = fa*255.0f, b = fb*255.0f, c = fc*255.0f;
+    }
+    else
+    {
+        a = ia, b = ib, c = ic;
+    }
 }
 
 
@@ -3308,7 +3361,7 @@ struct Lab2RGB_f
                 if(useXYZTable)
                 {
                     //Lab(full range) => XYZ: x: [-0.0328753, 1.98139] y: [0, 1] z: [-0.0821883, 4.41094]
-                    float x = ro*2.1f-0.1f, y = go, z = bo*4.5f-0.1f;
+                    float x = ro*2.5f-0.125f, y = go, z = bo*4.5f-0.125f;
                     ro = C0 * x + C1 * y + C2 * z;
                     go = C3 * x + C4 * y + C5 * z;
                     bo = C6 * x + C7 * y + C8 * z;
@@ -3453,14 +3506,13 @@ struct Lab2RGB_f
 };
 
 
-//TODO: rewrite it to use interpolation as option
 struct RGB2Lab_b
 {
     typedef uchar channel_type;
 
-    RGB2Lab_b(int _srccn, int blueIdx, const float* _coeffs,
+    RGB2Lab_b(int _srccn, int _blueIdx, const float* _coeffs,
               const float* _whitept, bool _srgb)
-    : srccn(_srccn), srgb(_srgb)
+    : srccn(_srccn), srgb(_srgb), blueIdx(_blueIdx)
     {
         static volatile int _3 = 3;
         initLabTabs();
@@ -3495,13 +3547,42 @@ struct RGB2Lab_b
         const int Lscale = (116*255+50)/100;
         const int Lshift = -((16*255*(1 << lab_shift2) + 50)/100);
         const ushort* tab = srgb ? sRGBGammaTab_b : linearGammaTab_b;
+        int bIdx = blueIdx;
         int i, scn = srccn;
         int C0 = coeffs[0], C1 = coeffs[1], C2 = coeffs[2],
             C3 = coeffs[3], C4 = coeffs[4], C5 = coeffs[5],
             C6 = coeffs[6], C7 = coeffs[7], C8 = coeffs[8];
         n *= 3;
 
-        for( i = 0; i < n; i += 3, src += scn )
+        i = 0;
+        if(useTetraInterpolation)
+        {
+            for(; i < n; i += 3, src += scn)
+            {
+                int R = src[bIdx], G = src[1], B = src[bIdx^2];
+
+                if(useXYZTable)
+                {
+                    //saturate_cast<ushort>(255.f*(1 << gamma_shift)*applyGamma(x));
+                    R = tab[R], G = tab[G], B = tab[B];
+
+                    int fX = CV_DESCALE(R*C0 + G*C1 + B*C2, gamma_shift);
+                    int fY = CV_DESCALE(R*C3 + G*C4 + B*C5, gamma_shift);
+                    int fZ = CV_DESCALE(R*C6 + G*C7 + B*C8, gamma_shift);
+
+                    R = fX, G = fY, B = fZ;
+                }
+
+                int L, a, b;
+                chooseInterpolate(R*LAB_BASE/255, G*LAB_BASE/255, B*LAB_BASE/255, RGB_TO_LAB, L, a, b);
+
+                dst[i] = saturate_cast<uchar>(L/(LAB_BASE/255));
+                dst[i+1] = saturate_cast<uchar>(a/(LAB_BASE/255));
+                dst[i+2] = saturate_cast<uchar>(b/(LAB_BASE/255));
+            }
+        }
+
+        for(; i < n; i += 3, src += scn )
         {
             int R = tab[src[0]], G = tab[src[1]], B = tab[src[2]];
             int fX = LabCbrtTab_b[CV_DESCALE(R*C0 + G*C1 + B*C2, lab_shift)];
@@ -3521,6 +3602,7 @@ struct RGB2Lab_b
     int srccn;
     int coeffs[9];
     bool srgb;
+    int blueIdx;
     bool useTetraInterpolation;
 };
 
@@ -3530,10 +3612,24 @@ struct Lab2RGB_b
 {
     typedef uchar channel_type;
 
-    Lab2RGB_b( int _dstcn, int blueIdx, const float* _coeffs,
+    Lab2RGB_b( int _dstcn, int _blueIdx, const float* _coeffs,
                const float* _whitept, bool _srgb )
-    : dstcn(_dstcn), cvt(3, blueIdx, _coeffs, _whitept, _srgb )
+    : dstcn(_dstcn), cvt(3, _blueIdx, _coeffs, _whitept, _srgb ), blueIdx(_blueIdx), srgb(_srgb)
     {
+        useTetraInterpolation = (!_coeffs && !_whitept && _srgb && enableTetraInterpolation);
+
+        if(!_coeffs)
+            _coeffs = XYZ2sRGB_D65;
+        if(!_whitept)
+            _whitept = D65;
+
+        for(int i = 0; i < 3; i++)
+        {
+            coeffs[i+(blueIdx^2*3)] = cvRound((1 << lab_shift)*_coeffs[i]*_whitept[i]);
+            coeffs[i+3] = cvRound((1 << lab_shift)*_coeffs[i+3]*_whitept[i]);
+            coeffs[i+blueIdx*3] = cvRound((1 << lab_shift)*_coeffs[i+6]*_whitept[i]);
+        }
+
         #if CV_NEON
         v_scale_inv = vdupq_n_f32(100.f/255.f);
         v_scale = vdupq_n_f32(255.f);
@@ -3591,6 +3687,11 @@ struct Lab2RGB_b
     void operator()(const uchar* src, uchar* dst, int n) const
     {
         int i, j, dcn = dstcn;
+        int bIdx = blueIdx;
+        const ushort* tab = srgb ? sRGBInvGammaTab_b : linearInvGammaTab_b;
+        int C0 = coeffs[0], C1 = coeffs[1], C2 = coeffs[2],
+        C3 = coeffs[3], C4 = coeffs[4], C5 = coeffs[5],
+        C6 = coeffs[6], C7 = coeffs[7], C8 = coeffs[8];
         uchar alpha = ColorChannel<uchar>::max();
         float CV_DECL_ALIGNED(16) buf[3*BLOCK_SIZE];
         #if CV_SSE2
@@ -3598,7 +3699,46 @@ struct Lab2RGB_b
         __m128 v_res = _mm_set_ps(0.f, 128.f, 128.f, 0.f);
         #endif
 
-        for( i = 0; i < n; i += BLOCK_SIZE, src += BLOCK_SIZE*3 )
+        i = 0;
+        if(useTetraInterpolation)
+        {
+            for (; i < n*3; i += 3, dst += dcn)
+            {
+                int L = src[i + 0]*LAB_BASE/255;
+                int a = src[i + 1]*LAB_BASE/256;
+                int b = src[i + 2]*LAB_BASE/256;
+
+                int ro, go, bo;
+                chooseInterpolate(L, a, b, LAB_TO_RGB, ro, go, bo);
+                if(useXYZTable)
+                {
+                    //Lab(full range) => XYZ: x: [-0.0328753, 1.98139] y: [0, 1] z: [-0.0821883, 4.41094]
+                    int x = (ro*20-LAB_BASE)/8, y = go, z = (bo*36-LAB_BASE)/8;
+
+                    ro = CV_DESCALE(C0 * x + C1 * y + C2 * z, lab_shift+(lab_base_shift-8));
+                    go = CV_DESCALE(C3 * x + C4 * y + C5 * z, lab_shift+(lab_base_shift-8));
+                    bo = CV_DESCALE(C6 * x + C7 * y + C8 * z, lab_shift+(lab_base_shift-8));
+
+                    ro = tab[ro];
+                    go = tab[go];
+                    bo = tab[bo];
+                }
+                else
+                {
+                    ro = ro/(LAB_BASE/255);
+                    go = go/(LAB_BASE/255);
+                    bo = bo/(LAB_BASE/255);
+                }
+
+                dst[bIdx^2] = saturate_cast<uchar>(bo);
+                dst[1] = saturate_cast<uchar>(go);
+                dst[bIdx] = saturate_cast<uchar>(ro);
+                if( dcn == 4 )
+                    dst[3] = alpha;
+            }
+        }
+
+        for(; i < n; i += BLOCK_SIZE, src += BLOCK_SIZE*3 )
         {
             int dn = std::min(n - i, (int)BLOCK_SIZE);
             j = 0;
@@ -3750,6 +3890,10 @@ struct Lab2RGB_b
     __m128i v_zero;
     bool haveSIMD;
     #endif
+    bool useTetraInterpolation;
+    int blueIdx;
+    float coeffs[9];
+    bool srgb;
 };
 
 #undef clip
@@ -3765,21 +3909,28 @@ TEST(ImgProc_Color, LabCheckWorking)
     std::string strIterType;
 
     //settings
-    #define TO_BGR 1
-    SET_INTER(LAB_INTER_TRILINEAR);
+    #define INT_DATA 1
+    #define TO_BGR 0
+    SET_INTER(LAB_INTER_TETRA);
     useXYZTable = true;
     useFloatVersion = false;
 
     enableTetraInterpolation = true;
     Lab2RGB_f interToBgr(3, 0, 0, 0, true);
     RGB2Lab_f interToLab(3, 0, 0, 0, true);
+    Lab2RGB_b interToBgr_b(3, 0, 0, 0, true);
+    RGB2Lab_b interToLab_b(3, 0, 0, 0, true);
     enableTetraInterpolation = false;
     Lab2RGB_f goldToBgr(3, 0, 0, 0, true);
     RGB2Lab_f goldToLab(3, 0, 0, 0, true);
+    Lab2RGB_b goldToBgr_b(3, 0, 0, 0, true);
+    RGB2Lab_b goldToLab_b(3, 0, 0, 0, true);
 
     char bgrChannels[3] = {'b', 'g', 'r'};
     char labChannels[3] = {'l', 'a', 'b'};
     char* channel = TO_BGR ? bgrChannels : labChannels;
+
+    int nPerfIters = 100;
 
     string dir = "/home/savuor/logs/ocv/lab_precision/" + string(TO_BGR ? "lab2bgr/" : "rgb2lab/");
 
@@ -3790,10 +3941,21 @@ TEST(ImgProc_Color, LabCheckWorking)
     Mat   mBackGold(pSize, pSize, CV_32FC3);
     Mat  mBackInter(pSize, pSize, CV_32FC3);
 
+    if(INT_DATA)
+    {
+        mGold  = Mat(pSize, pSize, CV_8UC3);
+        mSrc   = Mat(pSize, pSize, CV_8UC3);
+        mInter = Mat(pSize, pSize, CV_8UC3);
+        mBackGold  = Mat(pSize, pSize, CV_8UC3);
+        mBackInter = Mat(pSize, pSize, CV_8UC3);
+    }
+
     Scalar vmean, vdev;
     std::vector<Mat> chDiff, chInter;
     double vmin[3], vmax[3]; Point minPt[3], maxPt[3];
     double maxMaxError[4] = {-100, -100, -100, -100};
+    double times[4] = {0, 0, 0, 0};
+    int count = 0;
 
     int blue = 256, l = 0;
 #if TO_BGR
@@ -3804,23 +3966,45 @@ TEST(ImgProc_Color, LabCheckWorking)
     {
         for(size_t p = 0; p < pSize; p++)
         {
-            float* pRow = mSrc.ptr<float>(p);
+            float* pRow   = mSrc.ptr<float>(p);
+            uchar* pRow_b = mSrc.ptr<uchar>(p);
             for(size_t q = 0; q < pSize; q++)
             {
-                if(TO_BGR)
+                if(INT_DATA)
                 {
-                    //Lab
-                    pRow[3*q + 0] = 1.0f*l;
-                    pRow[3*q + 1] = 256.0f*q/(pSize-1)-128.0f;
-                    pRow[3*q + 2] = 256.0f*p/(pSize-1)-128.0f;
+                    if(TO_BGR)
+                    {
+                        //Lab
+                        pRow_b[3*q + 0] = l*255/100;
+                        pRow_b[3*q + 1] = q;
+                        pRow_b[3*q + 2] = p;
+                    }
+                    else
+                    {
+                        //BGR
+                        pRow_b[3*q + 0] = blue;
+                        pRow_b[3*q + 1] = q;
+                        pRow_b[3*q + 2] = p;
+                    }
                 }
                 else
                 {
-                    //BGR
-                    pRow[3*q + 0] = 1.0f*blue/(pSize-1);
-                    pRow[3*q + 1] = 1.0f*q/(pSize-1);
-                    pRow[3*q + 2] = 1.0f*p/(pSize-1);
+                    if(TO_BGR)
+                    {
+                        //Lab
+                        pRow[3*q + 0] = 1.0f*l;
+                        pRow[3*q + 1] = 256.0f*q/(pSize-1)-128.0f;
+                        pRow[3*q + 2] = 256.0f*p/(pSize-1)-128.0f;
+                    }
+                    else
+                    {
+                        //BGR
+                        pRow[3*q + 0] = 1.0f*blue/(pSize-1);
+                        pRow[3*q + 1] = 1.0f*q/(pSize-1);
+                        pRow[3*q + 2] = 1.0f*p/(pSize-1);
+                    }
                 }
+
             }
         }
 
@@ -3831,21 +4015,49 @@ TEST(ImgProc_Color, LabCheckWorking)
             float* pInter = mInter.ptr<float>(p);
             float* pBackGold  = mBackGold.ptr<float>(p);
             float* pBackInter = mBackInter.ptr<float>(p);
-            if(TO_BGR)
-            {
-                interToBgr(pSrc, pInter, pSize);
-                goldToBgr(pSrc, pGold, pSize);
 
-                interToLab(pInter, pBackInter, pSize);
-                goldToLab(pGold, pBackGold, pSize);
+            uchar* pSrc_b   =   mSrc.ptr<uchar>(p);
+            uchar* pGold_b  =  mGold.ptr<uchar>(p);
+            uchar* pInter_b = mInter.ptr<uchar>(p);
+            uchar* pBackGold_b  = mBackGold.ptr<uchar>(p);
+            uchar* pBackInter_b = mBackInter.ptr<uchar>(p);
+            if(INT_DATA)
+            {
+                if(TO_BGR)
+                {
+                    interToBgr_b(pSrc_b, pInter_b, pSize);
+                    goldToBgr_b(pSrc_b, pGold_b, pSize);
+
+                    interToLab_b(pInter_b, pBackInter_b, pSize);
+                    goldToLab_b(pGold_b, pBackGold_b, pSize);
+                }
+                else
+                {
+                    interToLab_b(pSrc_b, pInter_b, pSize);
+                    goldToLab_b(pSrc_b, pGold_b, pSize);
+
+                    interToBgr_b(pInter_b, pBackInter_b, pSize);
+                    goldToBgr_b(pGold_b, pBackGold_b, pSize);
+                }
             }
             else
             {
-                interToLab(pSrc, pInter, pSize);
-                goldToLab(pSrc, pGold, pSize);
+                if(TO_BGR)
+                {
+                    interToBgr(pSrc, pInter, pSize);
+                    goldToBgr(pSrc, pGold, pSize);
 
-                interToBgr(pInter, pBackInter, pSize);
-                goldToBgr(pGold, pBackGold, pSize);
+                    interToLab(pInter, pBackInter, pSize);
+                    goldToLab(pGold, pBackGold, pSize);
+                }
+                else
+                {
+                    interToLab(pSrc, pInter, pSize);
+                    goldToLab(pSrc, pGold, pSize);
+
+                    interToBgr(pInter, pBackInter, pSize);
+                    goldToBgr(pGold, pBackGold, pSize);
+                }
             }
         }
 
@@ -3908,13 +4120,116 @@ TEST(ImgProc_Color, LabCheckWorking)
         }
         std::cout << std::endl;
 
-        imwrite(format((dir + "noInter%03d.png").c_str(),  (TO_BGR ? l : blue)), TO_BGR ? mGold*256 : mGold+128);
-        imwrite(format((dir + "useInter%03d.png").c_str(), (TO_BGR ? l : blue)), TO_BGR ? mInter*256 : mInter+128);
-        imwrite(format((dir + "red%03d.png").c_str(),      (TO_BGR ? l : blue)), TO_BGR ? chInter[2]*256 : chInter[1]+128);
-        imwrite(format((dir + "diff%03d.png").c_str(),     (TO_BGR ? l : blue)), TO_BGR ? (mGold-mInter)*256+128 : (mGold-mInter)+128);
-        imwrite(format((dir + "absdiff%03d.png").c_str(),  (TO_BGR ? l : blue)), TO_BGR ? abs(mGold-mInter)*256 : abs(mGold-mInter));
-        imwrite(format((dir + "backgolddiff%03d.png").c_str(),  (TO_BGR ? l : blue)), TO_BGR ? backGoldDiff+128 : backGoldDiff*256);
-        imwrite(format((dir + "backinterdiff%03d.png").c_str(), (TO_BGR ? l : blue)), TO_BGR ? backInterDiff+128 : backInterDiff*256);
+        Mat tmp = INT_DATA ? mGold : (TO_BGR ? mGold*256 : mGold+128);
+        imwrite(format((dir + "noInter%03d.png").c_str(),  (TO_BGR ? l : blue)), tmp);
+        tmp = INT_DATA ? mInter : (TO_BGR ? mInter*256 : mInter+128);
+        imwrite(format((dir + "useInter%03d.png").c_str(), (TO_BGR ? l : blue)), tmp);
+        tmp = INT_DATA ? (TO_BGR ? chInter[2] : chInter[1]) : (TO_BGR ? chInter[2]*256 : chInter[1]+128);
+        imwrite(format((dir + "red%03d.png").c_str(),      (TO_BGR ? l : blue)), tmp);
+        tmp = INT_DATA ? (mGold-mInter) : (TO_BGR ? (mGold-mInter)*256+128 : (mGold-mInter)+128);
+        imwrite(format((dir + "diff%03d.png").c_str(),     (TO_BGR ? l : blue)), tmp);
+        tmp = INT_DATA ? abs(mGold-mInter) : (TO_BGR ? abs(mGold-mInter)*256 : abs(mGold-mInter));
+        imwrite(format((dir + "absdiff%03d.png").c_str(),  (TO_BGR ? l : blue)), tmp);
+        tmp = INT_DATA ? backGoldDiff : (TO_BGR ? backGoldDiff+128 : backGoldDiff*256);
+        imwrite(format((dir + "backgolddiff%03d.png").c_str(),  (TO_BGR ? l : blue)), tmp);
+        tmp = INT_DATA ? backInterDiff : (TO_BGR ? backInterDiff+128 : backInterDiff*256);
+        imwrite(format((dir + "backinterdiff%03d.png").c_str(), (TO_BGR ? l : blue)), tmp);
+
+        //perf test
+        std::cout << "perf: ";
+        TickMeter tm; double t;
+        //Lab to BGR
+        tm.start();
+        for(int i = 0; i < nPerfIters; i++)
+        {
+            for(size_t p = 0; p < pSize; p++)
+            {
+                float* pSrc   =   mSrc.ptr<float>(p);
+                float* pInter = mInter.ptr<float>(p);
+                uchar* pSrc_b   =   mSrc.ptr<uchar>(p);
+                uchar* pInter_b = mInter.ptr<uchar>(p);
+                if(INT_DATA)
+                {
+                    interToBgr_b(pSrc_b, pInter_b, pSize);
+                }
+                else
+                {
+                    interToBgr(pSrc, pInter, pSize);
+                }
+            }
+        }
+        tm.stop();
+        t = tm.getTimeSec(); times[0] += t;
+        std::cout << "inter lab2bgr: " << t << " ";
+        tm.reset(); tm.start();
+        for(int i = 0; i < nPerfIters; i++)
+        {
+            for(size_t p = 0; p < pSize; p++)
+            {
+                float* pSrc   =   mSrc.ptr<float>(p);
+                float* pGold = mGold.ptr<float>(p);
+                uchar* pSrc_b  =  mSrc.ptr<uchar>(p);
+                uchar* pGold_b = mGold.ptr<uchar>(p);
+                if(INT_DATA)
+                {
+                    goldToBgr_b(pSrc_b, pGold_b, pSize);
+                }
+                else
+                {
+                    goldToBgr(pSrc, pGold, pSize);
+                }
+            }
+        }
+        tm.stop();
+        t = tm.getTimeSec(); times[1] += t;
+        std::cout << "gold lab2bgr: " << t << " ";
+        //RGB to Lab
+        tm.reset(); tm.start();
+        for(int i = 0; i < nPerfIters; i++)
+        {
+            for(size_t p = 0; p < pSize; p++)
+            {
+                float* pSrc   =   mSrc.ptr<float>(p);
+                float* pInter = mInter.ptr<float>(p);
+                uchar* pSrc_b   =   mSrc.ptr<uchar>(p);
+                uchar* pInter_b = mInter.ptr<uchar>(p);
+                if(INT_DATA)
+                {
+                    interToLab_b(pSrc_b, pInter_b, pSize);
+                }
+                else
+                {
+                    interToLab(pSrc, pInter, pSize);
+                }
+            }
+        }
+        tm.stop();
+        t = tm.getTimeSec(); times[2] += t;
+        std::cout << "inter rgb2lab: " << t << " ";
+        tm.reset(); tm.start();
+        for(int i = 0; i < nPerfIters; i++)
+        {
+            for(size_t p = 0; p < pSize; p++)
+            {
+                float* pSrc   =   mSrc.ptr<float>(p);
+                float* pGold = mGold.ptr<float>(p);
+                uchar* pSrc_b  =  mSrc.ptr<uchar>(p);
+                uchar* pGold_b = mGold.ptr<uchar>(p);
+                if(INT_DATA)
+                {
+                    goldToLab_b(pSrc_b, pGold_b, pSize);
+                }
+                else
+                {
+                    goldToLab(pSrc, pGold, pSize);
+                }
+            }
+        }
+        tm.stop();
+        t = tm.getTimeSec(); times[3] += t;
+        std::cout << "gold rgb2lab: " << t << " ";
+        std::cout << std::endl;
+        count++;
     }
 
     //max-max channel errors
@@ -3926,6 +4241,18 @@ TEST(ImgProc_Color, LabCheckWorking)
     {
         std::cout << maxMaxError[i] << "\t";
     }
+    std::cout << std::endl;
+
+    //overall perf
+    for(int i = 0; i < 4; i++)
+    {
+        times[i] /= count;
+    }
+    std::cout << "perf: ";
+    std::cout << "inter lab2bgr: " << times[0] << " ";
+    std::cout << "gold lab2bgr: "  << times[1] << " ";
+    std::cout << "inter rgb2lab: " << times[2] << " ";
+    std::cout << "gold rgb2lab: "  << times[3] << " ";
     std::cout << std::endl;
 
 #undef SET_INTER
