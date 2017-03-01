@@ -2373,7 +2373,8 @@ static float sRGBGammaTab[GAMMA_TAB_SIZE*4], sRGBInvGammaTab[GAMMA_TAB_SIZE*4];
 static const float GammaTabScale = (float)GAMMA_TAB_SIZE;
 
 static ushort sRGBGammaTab_b[256], linearGammaTab_b[256];
-static ushort sRGBInvGammaTab_b[256], linearInvGammaTab_b[256];
+enum { inv_gamma_shift = 12, INV_GAMMA_TAB_SIZE = (1 << inv_gamma_shift) };
+static ushort sRGBInvGammaTab_b[INV_GAMMA_TAB_SIZE], linearInvGammaTab_b[INV_GAMMA_TAB_SIZE];
 #undef lab_shift
 #define lab_shift xyz_shift
 #define gamma_shift 3
@@ -2384,7 +2385,7 @@ static ushort LabCbrtTab_b[LAB_CBRT_TAB_SIZE_B];
 static bool enableTetraInterpolation = true;
 enum
 {
-    lab_lut_shift = 6,
+    lab_lut_shift = 5,
     LAB_LUT_DIM = (1 << lab_lut_shift)+1,
     lab_base_shift = 14,
     LAB_BASE = (1 << lab_base_shift),
@@ -2444,8 +2445,13 @@ static void initLabTabs()
             float x = i*(1.f/255.f);
             sRGBGammaTab_b[i] = saturate_cast<ushort>(255.f*(1 << gamma_shift)*applyGamma(x));
             linearGammaTab_b[i] = (ushort)(i*(1 << gamma_shift));
+        }
+        float invScale = 1.f/INV_GAMMA_TAB_SIZE;
+        for(i = 0; i < INV_GAMMA_TAB_SIZE; i++)
+        {
+            float x = i*invScale;
             sRGBInvGammaTab_b[i] = saturate_cast<ushort>(255.f*applyInvGamma(x));
-            linearInvGammaTab_b[i] = (ushort)(i);
+            linearInvGammaTab_b[i] = (ushort)(255.f*x);
         }
 
         for(i = 0; i < LAB_CBRT_TAB_SIZE_B; i++)
@@ -3563,19 +3569,26 @@ struct RGB2Lab_b
 
                 if(useXYZTable)
                 {
-                    //saturate_cast<ushort>(255.f*(1 << gamma_shift)*applyGamma(x));
                     R = tab[R], G = tab[G], B = tab[B];
 
                     int fX = CV_DESCALE(R*C0 + G*C1 + B*C2, gamma_shift);
                     int fY = CV_DESCALE(R*C3 + G*C4 + B*C5, gamma_shift);
                     int fZ = CV_DESCALE(R*C6 + G*C7 + B*C8, gamma_shift);
 
-                    R = fX, G = fY, B = fZ;
+                    //fX, fY, fZ are shifted on lab_shift and x255 at tab
+                    R = (fX << (lab_base_shift - lab_shift))/255;
+                    G = (fY << (lab_base_shift - lab_shift))/255;
+                    B = (fZ << (lab_base_shift - lab_shift))/255;
+                }
+                else
+                {
+                    R = R*LAB_BASE/255, G = G*LAB_BASE/255, B = B*LAB_BASE/255;
                 }
 
                 int L, a, b;
-                chooseInterpolate(R*LAB_BASE/255, G*LAB_BASE/255, B*LAB_BASE/255, RGB_TO_LAB, L, a, b);
+                chooseInterpolate(R, G, B, RGB_TO_LAB, L, a, b);
 
+                //TODO: check: 255 or 256?
                 dst[i] = saturate_cast<uchar>(L/(LAB_BASE/255));
                 dst[i+1] = saturate_cast<uchar>(a/(LAB_BASE/255));
                 dst[i+2] = saturate_cast<uchar>(b/(LAB_BASE/255));
@@ -3715,9 +3728,14 @@ struct Lab2RGB_b
                     //Lab(full range) => XYZ: x: [-0.0328753, 1.98139] y: [0, 1] z: [-0.0821883, 4.41094]
                     int x = (ro*20-LAB_BASE)/8, y = go, z = (bo*36-LAB_BASE)/8;
 
-                    ro = CV_DESCALE(C0 * x + C1 * y + C2 * z, lab_shift+(lab_base_shift-8));
-                    go = CV_DESCALE(C3 * x + C4 * y + C5 * z, lab_shift+(lab_base_shift-8));
-                    bo = CV_DESCALE(C6 * x + C7 * y + C8 * z, lab_shift+(lab_base_shift-8));
+                    const int shift = lab_shift+(lab_base_shift-inv_gamma_shift);
+                    ro = CV_DESCALE(C0 * x + C1 * y + C2 * z, shift);
+                    go = CV_DESCALE(C3 * x + C4 * y + C5 * z, shift);
+                    bo = CV_DESCALE(C6 * x + C7 * y + C8 * z, shift);
+
+                    ro = max(0, min((int)INV_GAMMA_TAB_SIZE-1, ro));
+                    go = max(0, min((int)INV_GAMMA_TAB_SIZE-1, go));
+                    bo = max(0, min((int)INV_GAMMA_TAB_SIZE-1, bo));
 
                     ro = tab[ro];
                     go = tab[go];
@@ -3912,7 +3930,7 @@ TEST(ImgProc_Color, LabCheckWorking)
     #define INT_DATA 1
     #define TO_BGR 0
     SET_INTER(LAB_INTER_TETRA);
-    useXYZTable = true;
+    useXYZTable = false;
     useFloatVersion = false;
 
     enableTetraInterpolation = true;
