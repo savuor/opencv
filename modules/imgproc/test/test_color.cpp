@@ -2633,21 +2633,8 @@ static inline void tetraInterpolate(int cx, int cy, int cz, int* LUT,
     int y = (cy - (ty << (lab_base_shift - lab_lut_shift))) << lab_lut_shift;
     int z = (cz - (tz << (lab_base_shift - lab_lut_shift))) << lab_lut_shift;
 
-#define SETPT(n, _x, _y, _z) \
-    do\
-        if(w##n)\
-        {\
-            (a##n) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z))];\
-            (b##n) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 1];\
-            (c##n) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 2];\
-        }\
-        else\
-        {\
-            (a##n) = (b##n) = (c##n) = 0;\
-        }\
-    while(0)
-
     int w0, w1, w2, w3;
+    int x1, y1, z1, x2, y2, z2;
     int a0, a1, a2, a3, b0, b1, b2, b3, c0, c1, c2, c3;
 
     if(x > y)
@@ -2655,20 +2642,20 @@ static inline void tetraInterpolate(int cx, int cy, int cz, int* LUT,
         if(y > z)
         {
             w0 = LAB_BASE - x; w1 = x - y; w2 = y - z; w3 = z;
-            SETPT(1, 1, 0, 0);
-            SETPT(2, 1, 1, 0);
+            x1 = 1, y1 = 0, z1 = 0;
+            x2 = 1, y2 = 1, z2 = 0;
         }
         else if(x > z)
         {
             w0 = LAB_BASE - x; w1 = x - z; w2 = z - y; w3 = y;
-            SETPT(1, 1, 0, 0);
-            SETPT(2, 1, 0, 1);
+            x1 = 1, y1 = 0, z1 = 0;
+            x2 = 1, y2 = 0, z2 = 1;
         }
         else
         {
             w0 = LAB_BASE - z; w1 = z - x; w2 = x - y; w3 = y;
-            SETPT(1, 0, 0, 1);
-            SETPT(2, 1, 0, 1);
+            x1 = 0, y1 = 0, z1 = 1;
+            x2 = 1, y2 = 0, z2 = 1;
         }
     }
     else
@@ -2678,26 +2665,64 @@ static inline void tetraInterpolate(int cx, int cy, int cz, int* LUT,
             if(x > z)
             {
                 w0 = LAB_BASE - y; w1 = y - x; w2 = x - z; w3 = z;
-                SETPT(1, 0, 1, 0);
-                SETPT(2, 1, 1, 0);
+                x1 = 0, y1 = 1, z1 = 0;
+                x2 = 1, y2 = 1, z2 = 0;
             }
             else
             {
                 w0 = LAB_BASE - y; w1 = y - z; w2 = z - x; w3 = x;
-                SETPT(1, 0, 1, 0);
-                SETPT(2, 0, 1, 1);
+                x1 = 0, y1 = 1, z1 = 0;
+                x2 = 0, y2 = 1, z2 = 1;
             }
         }
         else
         {
             w0 = LAB_BASE - z; w1 = z - y; w2 = y - x; w3 = x;
-            SETPT(1, 0, 0, 1);
-            SETPT(2, 0, 1, 1);
+            x1 = 0, y1 = 0, z1 = 1;
+            x2 = 0, y2 = 1, z2 = 1;
         }
     }
 
-    SETPT(0, 0, 0, 0);
-    SETPT(3, 1, 1, 1);
+    if(w0)
+    {
+        a0 = LUT[3*tx + 3*LAB_LUT_DIM*ty + 3*LAB_LUT_DIM*LAB_LUT_DIM*tz];
+        b0 = LUT[3*tx + 3*LAB_LUT_DIM*ty + 3*LAB_LUT_DIM*LAB_LUT_DIM*tz + 1];
+        c0 = LUT[3*tx + 3*LAB_LUT_DIM*ty + 3*LAB_LUT_DIM*LAB_LUT_DIM*tz + 2];
+    }
+    else
+    {
+        a0 = b0 = c0 = 0;
+    }
+    if(w1)
+    {
+        a1 = LUT[3*(tx+x1) + 3*LAB_LUT_DIM*(ty+y1) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+z1)];
+        b1 = LUT[3*(tx+x1) + 3*LAB_LUT_DIM*(ty+y1) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+z1) + 1];
+        c1 = LUT[3*(tx+x1) + 3*LAB_LUT_DIM*(ty+y1) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+z1) + 2];
+    }
+    else
+    {
+        a1 = b1 = c1 = 0;
+    }
+    if(w2)
+    {
+        a2 = LUT[3*(tx+x2) + 3*LAB_LUT_DIM*(ty+y2) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+z2)];
+        b2 = LUT[3*(tx+x2) + 3*LAB_LUT_DIM*(ty+y2) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+z2) + 1];
+        c2 = LUT[3*(tx+x2) + 3*LAB_LUT_DIM*(ty+y2) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+z2) + 2];
+    }
+    else
+    {
+        a2 = b2 = c2 = 0;
+    }
+    if(w3)
+    {
+        a3 = LUT[3*(tx+1) + 3*LAB_LUT_DIM*(ty+1) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+1)];
+        b3 = LUT[3*(tx+1) + 3*LAB_LUT_DIM*(ty+1) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+1) + 1];
+        c3 = LUT[3*(tx+1) + 3*LAB_LUT_DIM*(ty+1) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+1) + 2];
+    }
+    else
+    {
+        a3 = b3 = c3 = 0;
+    }
 
 #undef SETPT
 
@@ -2810,31 +2835,11 @@ static inline void noInterpolate(int cx, int cy, int cz, int* LUT,
     int ty = cy >> (lab_base_shift - lab_lut_shift);
     int tz = cz >> (lab_base_shift - lab_lut_shift);
 
-    //x, y, z are [0; LAB_BASE)
-    int x = (cx - (tx << (lab_base_shift - lab_lut_shift))) << lab_lut_shift;
-    int y = (cy - (ty << (lab_base_shift - lab_lut_shift))) << lab_lut_shift;
-    int z = (cz - (tz << (lab_base_shift - lab_lut_shift))) << lab_lut_shift;
+    int a0, b0, c0;
 
-#define SETPT(n, _x, _y, _z) \
-    do\
-        if(w##n)\
-        {\
-            (a##n) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z))];\
-            (b##n) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 1];\
-            (c##n) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 2];\
-        }\
-        else\
-        {\
-            (a##n) = (b##n) = (c##n) = 0;\
-        }\
-    while(0)
-
-    int w0 = 1, w1, w2, w3;
-    int a0, a1, a2, a3, b0, b1, b2, b3, c0, c1, c2, c3;
-
-    SETPT(0, 0, 0, 0);
-
-#undef SETPT
+    a0 = LUT[3*tx + 3*LAB_LUT_DIM*ty + 3*LAB_LUT_DIM*LAB_LUT_DIM*tz];
+    b0 = LUT[3*tx + 3*LAB_LUT_DIM*ty + 3*LAB_LUT_DIM*LAB_LUT_DIM*tz + 1];
+    c0 = LUT[3*tx + 3*LAB_LUT_DIM*ty + 3*LAB_LUT_DIM*LAB_LUT_DIM*tz + 2];
 
     a = a0;
     b = b0;
