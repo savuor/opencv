@@ -44,7 +44,9 @@
 //to be removed
 #include "opencv2/core.hpp"
 #include "opencv2/core/hal/interface.h"
+#include "opencv2/core/hal/intrin.hpp"
 #include "opencv2/core/sse_utils.hpp"
+
 
 using namespace cv;
 using namespace std;
@@ -2389,6 +2391,8 @@ enum
     LAB_LUT_DIM = (1 << lab_lut_shift)+1,
     lab_base_shift = 14,
     LAB_BASE = (1 << lab_base_shift),
+    trilinear_shift = 8 - lab_lut_shift,
+    TRILINEAR_BASE = (1 << trilinear_shift)
 };
 enum Cvt_Type
 {
@@ -2402,6 +2406,7 @@ static float Lab2RGBLUT_f[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3];
 static float RGB2LabLUT_f[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3];
 static float Lab2XYZLUT_f[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3];
 static float XYZ2LabLUT_f[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3];
+int trilinearLUT[TRILINEAR_BASE*TRILINEAR_BASE*TRILINEAR_BASE*8];
 
 #define clip(value) \
     value < 0.0f ? 0.0f : value > 1.0f ? 1.0f : value;
@@ -2464,7 +2469,6 @@ static void initLabTabs()
         {
             static const float lThresh = 0.008856f * 903.3f;
             static const float fThresh = 7.787f * 0.008856f + 16.0f / 116.0f;
-            static const float _1_3 = 1.0f / 3.0f;
             static const float _a = 16.0f / 116.0f;
 
             const float* _whitept = D65;
@@ -2568,9 +2572,9 @@ static void initLabTabs()
                         float Y = R*D3 + G*D4 + B*D5;
                         float Z = R*D6 + G*D7 + B*D8;
 
-                        float FX = X > 0.008856f ? std::pow(X, _1_3) : (7.787f * X + _a);
-                        float FY = Y > 0.008856f ? std::pow(Y, _1_3) : (7.787f * Y + _a);
-                        float FZ = Z > 0.008856f ? std::pow(Z, _1_3) : (7.787f * Z + _a);
+                        float FX = X > 0.008856f ? std::pow(X, _1_3f) : (7.787f * X + _a);
+                        float FY = Y > 0.008856f ? std::pow(Y, _1_3f) : (7.787f * Y + _a);
+                        float FZ = Z > 0.008856f ? std::pow(Z, _1_3f) : (7.787f * Z + _a);
 
                         float L = Y > 0.008856f ? (116.f * FY - 16.f) : (903.3f * Y);
                         float a = 500.f * (FX - FY);
@@ -2604,6 +2608,21 @@ static void initLabTabs()
                     }
                 }
             }
+            for(int p = 0; p < TRILINEAR_BASE; p++)
+            {
+                int pp = TRILINEAR_BASE - p;
+                for(int q = 0; q < TRILINEAR_BASE; q++)
+                {
+                    int qq = TRILINEAR_BASE - q;
+                    for(int r = 0; r < TRILINEAR_BASE; r++)
+                    {
+                        int rr = TRILINEAR_BASE - r;
+                        int* w = &trilinearLUT[8*p + 8*TRILINEAR_BASE*q + 8*TRILINEAR_BASE*TRILINEAR_BASE*r];
+                        w[0]  = pp * qq * rr; w[1]  = pp * qq * r ; w[2]  = pp * q  * rr; w[3]  = pp * q  * r ;
+                        w[4]  = p  * qq * rr; w[5]  = p  * qq * r ; w[6]  = p  * q  * rr; w[7]  = p  * q  * r ;
+                    }
+                }
+            }
         }
 
         initialized = true;
@@ -2611,49 +2630,54 @@ static void initLabTabs()
 }
 
 
-/* The idea is taken from the article:
- * Performing color space conversions with three-dimensional linear interpolation
- * by James M. Kasson, Sigfredo I. Nm, Wil Plouffe, James L. Hafner
- * Journal of Electronic Imaging 4(3), 226—250 (July 1995).
- */
+// cx, cy, cz are in [0; LAB_BASE]
 static inline void tetraInterpolate(int cx, int cy, int cz, int* LUT,
                                     int& a, int& b, int& c)
 {
-    cx = (cx >= 0) ? (cx <= LAB_BASE ? cx : LAB_BASE) : 0;
-    cy = (cy >= 0) ? (cy <= LAB_BASE ? cy : LAB_BASE) : 0;
-    cz = (cz >= 0) ? (cz <= LAB_BASE ? cz : LAB_BASE) : 0;
-
     //LUT idx of origin pt of cube
     int tx = cx >> (lab_base_shift - lab_lut_shift);
     int ty = cy >> (lab_base_shift - lab_lut_shift);
     int tz = cz >> (lab_base_shift - lab_lut_shift);
 
     //x, y, z are [0; LAB_BASE)
-    int x = (cx - (tx << (lab_base_shift - lab_lut_shift))) << lab_lut_shift;
-    int y = (cy - (ty << (lab_base_shift - lab_lut_shift))) << lab_lut_shift;
-    int z = (cz - (tz << (lab_base_shift - lab_lut_shift))) << lab_lut_shift;
+    static const int bitMask = (1 << lab_base_shift) - 1;
+    int x = (cx << lab_lut_shift) & bitMask;
+    int y = (cy << lab_lut_shift) & bitMask;
+    int z = (cz << lab_lut_shift) & bitMask;
 
+    //sort x, y, z
+    int s0, s1, s2, tmp;
+    if(x < y)
+        s0 = y, s1 = x;
+    else
+        s0 = x, s1 = y;
+    if(s1 < z)
+        s2 = s1, s1 = z;
+    else
+        s2 = z;
+    if(s0 < s1)
+        tmp = s0, s0 = s1, s1 = tmp;
+
+    //weights and values
     int w0, w1, w2, w3;
-    int x1, y1, z1, x2, y2, z2;
+    w0 = LAB_BASE - s0; w1 = s0 - s1; w2 = s1 - s2; w3 = s2;
     int a0, a1, a2, a3, b0, b1, b2, b3, c0, c1, c2, c3;
+    int x1, y1, z1, x2, y2, z2;
 
     if(x > y)
     {
         if(y > z)
         {
-            w0 = LAB_BASE - x; w1 = x - y; w2 = y - z; w3 = z;
             x1 = 1, y1 = 0, z1 = 0;
             x2 = 1, y2 = 1, z2 = 0;
         }
         else if(x > z)
         {
-            w0 = LAB_BASE - x; w1 = x - z; w2 = z - y; w3 = y;
             x1 = 1, y1 = 0, z1 = 0;
             x2 = 1, y2 = 0, z2 = 1;
         }
         else
         {
-            w0 = LAB_BASE - z; w1 = z - x; w2 = x - y; w3 = y;
             x1 = 0, y1 = 0, z1 = 1;
             x2 = 1, y2 = 0, z2 = 1;
         }
@@ -2664,20 +2688,17 @@ static inline void tetraInterpolate(int cx, int cy, int cz, int* LUT,
         {
             if(x > z)
             {
-                w0 = LAB_BASE - y; w1 = y - x; w2 = x - z; w3 = z;
                 x1 = 0, y1 = 1, z1 = 0;
                 x2 = 1, y2 = 1, z2 = 0;
             }
             else
             {
-                w0 = LAB_BASE - y; w1 = y - z; w2 = z - x; w3 = x;
                 x1 = 0, y1 = 1, z1 = 0;
                 x2 = 0, y2 = 1, z2 = 1;
             }
         }
         else
         {
-            w0 = LAB_BASE - z; w1 = z - y; w2 = y - x; w3 = x;
             x1 = 0, y1 = 0, z1 = 1;
             x2 = 0, y2 = 1, z2 = 1;
         }
@@ -2846,57 +2867,40 @@ static inline void noInterpolate(int cx, int cy, int cz, int* LUT,
     c = c0;
 }
 
-
-enum
-{
-    trilinear_shift = 4,
-    TRILINEAR_BASE = (1 << trilinear_shift)
-};
-
+// cx, cy, cz are in [0; LAB_BASE]
 static inline void trilinearInterpolate(int cx, int cy, int cz, int* LUT,
                                         int& a, int& b, int& c)
 {
-    cx = (cx >= 0) ? (cx <= LAB_BASE ? cx : LAB_BASE) : 0;
-    cy = (cy >= 0) ? (cy <= LAB_BASE ? cy : LAB_BASE) : 0;
-    cz = (cz >= 0) ? (cz <= LAB_BASE ? cz : LAB_BASE) : 0;
-
     //LUT idx of origin pt of cube
     int tx = cx >> (lab_base_shift - lab_lut_shift);
     int ty = cy >> (lab_base_shift - lab_lut_shift);
     int tz = cz >> (lab_base_shift - lab_lut_shift);
 
     //x, y, z are [0; TRILINEAR_BASE)
-    int x = (cx - (tx << (lab_base_shift - lab_lut_shift)));
-    int y = (cy - (ty << (lab_base_shift - lab_lut_shift)));
-    int z = (cz - (tz << (lab_base_shift - lab_lut_shift)));
-    if(lab_base_shift - lab_lut_shift > trilinear_shift)
-    {
-        x = x >> (lab_base_shift - lab_lut_shift - trilinear_shift);
-        y = y >> (lab_base_shift - lab_lut_shift - trilinear_shift);
-        z = z >> (lab_base_shift - lab_lut_shift - trilinear_shift);
-    }
-    else
-    {
-        x = x << (trilinear_shift - (lab_base_shift - lab_lut_shift));
-        y = y << (trilinear_shift - (lab_base_shift - lab_lut_shift));
-        z = z << (trilinear_shift - (lab_base_shift - lab_lut_shift));
-    }
+    static const int bitMask = (1 << trilinear_shift) - 1;
+    int x = (cx >> (lab_base_shift - 8)) & bitMask;
+    int y = (cy >> (lab_base_shift - 8)) & bitMask;
+    int z = (cz >> (lab_base_shift - 8)) & bitMask;
 
     int w[8];
     int aa[8], bb[8], cc[8];
+    for(int i = 0; i < 8; i++)
+    {
+        w[i] = trilinearLUT[8*x + 8*TRILINEAR_BASE*y + 8*TRILINEAR_BASE*TRILINEAR_BASE*z + i];
+    }
 
 #define SETPT(n, _x, _y, _z) \
     do\
     {\
-        w[n]  = (_x) ? x : (TRILINEAR_BASE - x);\
-        w[n] *= (_y) ? y : (TRILINEAR_BASE - y);\
-        w[n] *= (_z) ? z : (TRILINEAR_BASE - z);\
-        aa[n] = bb[n] = cc[n] = 0;\
         if(w[n])\
         {\
             aa[n] = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z))];\
             bb[n] = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 1];\
             cc[n] = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 2];\
+        }\
+        else\
+        {\
+            aa[n] = bb[n] = cc[n] = 0;\
         }\
     }\
     while(0)
@@ -2912,13 +2916,9 @@ static inline void trilinearInterpolate(int cx, int cy, int cz, int* LUT,
 
 #undef SETPT
 
-    a = b = c = 0;
-    for(int i = 0; i < 8; i++)
-    {
-        a += aa[i]*w[i];
-        b += bb[i]*w[i];
-        c += cc[i]*w[i];
-    }
+    a = aa[0]*w[0]+aa[1]*w[1]+aa[2]*w[2]+aa[3]*w[3]+aa[4]*w[4]+aa[5]*w[5]+aa[6]*w[6]+aa[7]*w[7];
+    b = bb[0]*w[0]+bb[1]*w[1]+bb[2]*w[2]+bb[3]*w[3]+bb[4]*w[4]+bb[5]*w[5]+bb[6]*w[6]+bb[7]*w[7];
+    c = cc[0]*w[0]+cc[1]*w[1]+cc[2]*w[2]+cc[3]*w[3]+cc[4]*w[4]+cc[5]*w[5]+cc[6]*w[6]+cc[7]*w[7];
 
     a = CV_DESCALE(a, trilinear_shift*3);
     b = CV_DESCALE(b, trilinear_shift*3);
@@ -3185,7 +3185,6 @@ struct RGB2Lab_f
             }
         }
 
-        static const float _1_3 = 1.0f / 3.0f;
         static const float _a = 16.0f / 116.0f;
         for (; i < n; i += 3, src += scn )
         {
@@ -3203,9 +3202,9 @@ struct RGB2Lab_f
             float Y = R*C3 + G*C4 + B*C5;
             float Z = R*C6 + G*C7 + B*C8;
 
-            float FX = X > 0.008856f ? std::pow(X, _1_3) : (7.787f * X + _a);
-            float FY = Y > 0.008856f ? std::pow(Y, _1_3) : (7.787f * Y + _a);
-            float FZ = Z > 0.008856f ? std::pow(Z, _1_3) : (7.787f * Z + _a);
+            float FX = X > 0.008856f ? std::pow(X, _1_3f) : (7.787f * X + _a);
+            float FY = Y > 0.008856f ? std::pow(Y, _1_3f) : (7.787f * Y + _a);
+            float FZ = Z > 0.008856f ? std::pow(Z, _1_3f) : (7.787f * Z + _a);
 
             float L = Y > 0.008856f ? (116.f * FY - 16.f) : (903.3f * Y);
             float a = 500.f * (FX - FY);
@@ -3934,7 +3933,7 @@ TEST(ImgProc_Color, LabCheckWorking)
     //settings
     #define INT_DATA 1
     #define TO_BGR 0
-    SET_INTER(LAB_INTER_TETRA);
+    SET_INTER(LAB_INTER_TRILINEAR);
     useXYZTable = false;
     useFloatVersion = false;
 
@@ -3980,11 +3979,11 @@ TEST(ImgProc_Color, LabCheckWorking)
     double times[4] = {0, 0, 0, 0};
     int count = 0;
 
-    int blue = 256, l = 0;
+    int blue = 0, l = 0;
 #if TO_BGR
     for(; l < 100+1; l++)
 #else
-    for(blue = 0; blue < 256+1; blue++)
+    for(; blue < 256+1; blue++)
 #endif
     {
         for(size_t p = 0; p < pSize; p++)
@@ -4257,7 +4256,7 @@ TEST(ImgProc_Color, LabCheckWorking)
 
     //max-max channel errors
     std::cout << std::endl << (TO_BGR ? "Lab2RGB" : "RGB2Lab") << " ";
-    std::cout << "lab_lut_shift " << lab_lut_shift << " ";
+    std::cout << "lab_lut_shift " << (int)lab_lut_shift << " ";
     std::cout << strIterType << " " << (useXYZTable ? "+XYZ" : "-XYZ") << " ";
     std::cout << (useFloatVersion ? "float" : "int") << ": ";
     for(int i = 0; i < 4; i++)
