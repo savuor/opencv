@@ -2639,47 +2639,43 @@ static inline void tetraInterpolate(int cx, int cy, int cz, int* LUT,
     int ty = cy >> (lab_base_shift - lab_lut_shift);
     int tz = cz >> (lab_base_shift - lab_lut_shift);
 
+    int* baseLUT = &LUT[3*tx + 3*LAB_LUT_DIM*ty + 3*LAB_LUT_DIM*LAB_LUT_DIM*tz];
+    int* p1, *p2;
+
     //x, y, z are [0; LAB_BASE)
     static const int bitMask = (1 << lab_base_shift) - 1;
     int x = (cx << lab_lut_shift) & bitMask;
     int y = (cy << lab_lut_shift) & bitMask;
     int z = (cz << lab_lut_shift) & bitMask;
 
-    //sort x, y, z
-    int s0, s1, s2, tmp;
-    if(x < y)
-        s0 = y, s1 = x;
-    else
-        s0 = x, s1 = y;
-    if(s1 < z)
-        s2 = s1, s1 = z;
-    else
-        s2 = z;
-    if(s0 < s1)
-        tmp = s0, s0 = s1, s1 = tmp;
-
-    //weights and values
-    int w0, w1, w2, w3;
-    w0 = LAB_BASE - s0; w1 = s0 - s1; w2 = s1 - s2; w3 = s2;
-    int a0, a1, a2, a3, b0, b1, b2, b3, c0, c1, c2, c3;
-    int x1, y1, z1, x2, y2, z2;
+    //sorted x, y, z
+    int s0, s1, s2;
 
     if(x > y)
     {
         if(y > z)
         {
-            x1 = 1, y1 = 0, z1 = 0;
-            x2 = 1, y2 = 1, z2 = 0;
+            const int x1 = 1, y1 = 0, z1 = 0;
+            const int x2 = 1, y2 = 1, z2 = 0;
+            p1 = &baseLUT[3*x1 + 3*LAB_LUT_DIM*y1 + 3*LAB_LUT_DIM*LAB_LUT_DIM*z1];
+            p2 = &baseLUT[3*x2 + 3*LAB_LUT_DIM*y2 + 3*LAB_LUT_DIM*LAB_LUT_DIM*z2];
+            s0 = x, s1 = y, s2 = z;
         }
         else if(x > z)
         {
-            x1 = 1, y1 = 0, z1 = 0;
-            x2 = 1, y2 = 0, z2 = 1;
+            const int x1 = 1, y1 = 0, z1 = 0;
+            const int x2 = 1, y2 = 0, z2 = 1;
+            p1 = &baseLUT[3*x1 + 3*LAB_LUT_DIM*y1 + 3*LAB_LUT_DIM*LAB_LUT_DIM*z1];
+            p2 = &baseLUT[3*x2 + 3*LAB_LUT_DIM*y2 + 3*LAB_LUT_DIM*LAB_LUT_DIM*z2];
+            s0 = x, s1 = z, s2 = y;
         }
         else
         {
-            x1 = 0, y1 = 0, z1 = 1;
-            x2 = 1, y2 = 0, z2 = 1;
+            const int x1 = 0, y1 = 0, z1 = 1;
+            const int x2 = 1, y2 = 0, z2 = 1;
+            p1 = &baseLUT[3*x1 + 3*LAB_LUT_DIM*y1 + 3*LAB_LUT_DIM*LAB_LUT_DIM*z1];
+            p2 = &baseLUT[3*x2 + 3*LAB_LUT_DIM*y2 + 3*LAB_LUT_DIM*LAB_LUT_DIM*z2];
+            s0 = z, s1 = x, s2 = y;
         }
     }
     else
@@ -2688,27 +2684,41 @@ static inline void tetraInterpolate(int cx, int cy, int cz, int* LUT,
         {
             if(x > z)
             {
-                x1 = 0, y1 = 1, z1 = 0;
-                x2 = 1, y2 = 1, z2 = 0;
+                const int x1 = 0, y1 = 1, z1 = 0;
+                const int x2 = 1, y2 = 1, z2 = 0;
+                p1 = &baseLUT[3*x1 + 3*LAB_LUT_DIM*y1 + 3*LAB_LUT_DIM*LAB_LUT_DIM*z1];
+                p2 = &baseLUT[3*x2 + 3*LAB_LUT_DIM*y2 + 3*LAB_LUT_DIM*LAB_LUT_DIM*z2];
+                s0 = y, s1 = x, s2 = z;
             }
             else
             {
-                x1 = 0, y1 = 1, z1 = 0;
-                x2 = 0, y2 = 1, z2 = 1;
+                const int x1 = 0, y1 = 1, z1 = 0;
+                const int x2 = 0, y2 = 1, z2 = 1;
+                p1 = &baseLUT[3*x1 + 3*LAB_LUT_DIM*y1 + 3*LAB_LUT_DIM*LAB_LUT_DIM*z1];
+                p2 = &baseLUT[3*x2 + 3*LAB_LUT_DIM*y2 + 3*LAB_LUT_DIM*LAB_LUT_DIM*z2];
+                s0 = y, s1 = z, s2 = x;
             }
         }
         else
         {
-            x1 = 0, y1 = 0, z1 = 1;
-            x2 = 0, y2 = 1, z2 = 1;
+            const int x1 = 0, y1 = 0, z1 = 1;
+            const int x2 = 0, y2 = 1, z2 = 1;
+            p1 = &baseLUT[3*x1 + 3*LAB_LUT_DIM*y1 + 3*LAB_LUT_DIM*LAB_LUT_DIM*z1];
+            p2 = &baseLUT[3*x2 + 3*LAB_LUT_DIM*y2 + 3*LAB_LUT_DIM*LAB_LUT_DIM*z2];
+            s0 = z, s1 = y, s2 = x;
         }
     }
 
+    //weights and values
+    int w0 = LAB_BASE - s0, w1 = s0 - s1, w2 = s1 - s2, w3 = s2;
+    int a0, a1, a2, a3, b0, b1, b2, b3, c0, c1, c2, c3;
+
+    //in case of going out of LUT bounds the corresponding weights will be zero
     if(w0)
     {
-        a0 = LUT[3*tx + 3*LAB_LUT_DIM*ty + 3*LAB_LUT_DIM*LAB_LUT_DIM*tz];
-        b0 = LUT[3*tx + 3*LAB_LUT_DIM*ty + 3*LAB_LUT_DIM*LAB_LUT_DIM*tz + 1];
-        c0 = LUT[3*tx + 3*LAB_LUT_DIM*ty + 3*LAB_LUT_DIM*LAB_LUT_DIM*tz + 2];
+        a0 = baseLUT[0];
+        b0 = baseLUT[1];
+        c0 = baseLUT[2];
     }
     else
     {
@@ -2716,9 +2726,9 @@ static inline void tetraInterpolate(int cx, int cy, int cz, int* LUT,
     }
     if(w1)
     {
-        a1 = LUT[3*(tx+x1) + 3*LAB_LUT_DIM*(ty+y1) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+z1)];
-        b1 = LUT[3*(tx+x1) + 3*LAB_LUT_DIM*(ty+y1) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+z1) + 1];
-        c1 = LUT[3*(tx+x1) + 3*LAB_LUT_DIM*(ty+y1) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+z1) + 2];
+        a1 = p1[0];
+        b1 = p1[1];
+        c1 = p1[2];
     }
     else
     {
@@ -2726,9 +2736,9 @@ static inline void tetraInterpolate(int cx, int cy, int cz, int* LUT,
     }
     if(w2)
     {
-        a2 = LUT[3*(tx+x2) + 3*LAB_LUT_DIM*(ty+y2) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+z2)];
-        b2 = LUT[3*(tx+x2) + 3*LAB_LUT_DIM*(ty+y2) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+z2) + 1];
-        c2 = LUT[3*(tx+x2) + 3*LAB_LUT_DIM*(ty+y2) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+z2) + 2];
+        a2 = p2[0];
+        b2 = p2[1];
+        c2 = p2[2];
     }
     else
     {
@@ -2736,9 +2746,9 @@ static inline void tetraInterpolate(int cx, int cy, int cz, int* LUT,
     }
     if(w3)
     {
-        a3 = LUT[3*(tx+1) + 3*LAB_LUT_DIM*(ty+1) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+1)];
-        b3 = LUT[3*(tx+1) + 3*LAB_LUT_DIM*(ty+1) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+1) + 1];
-        c3 = LUT[3*(tx+1) + 3*LAB_LUT_DIM*(ty+1) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+1) + 2];
+        a3 = baseLUT[3*1 + 3*LAB_LUT_DIM*1 + 3*LAB_LUT_DIM*LAB_LUT_DIM*1];
+        b3 = baseLUT[3*1 + 3*LAB_LUT_DIM*1 + 3*LAB_LUT_DIM*LAB_LUT_DIM*1 + 1];
+        c3 = baseLUT[3*1 + 3*LAB_LUT_DIM*1 + 3*LAB_LUT_DIM*LAB_LUT_DIM*1 + 2];
     }
     else
     {
@@ -2876,6 +2886,8 @@ static inline void trilinearInterpolate(int cx, int cy, int cz, int* LUT,
     int ty = cy >> (lab_base_shift - lab_lut_shift);
     int tz = cz >> (lab_base_shift - lab_lut_shift);
 
+    int* baseLUT = &LUT[3*tx + 3*LAB_LUT_DIM*ty + 3*LAB_LUT_DIM*LAB_LUT_DIM*tz];
+
     //x, y, z are [0; TRILINEAR_BASE)
     static const int bitMask = (1 << trilinear_shift) - 1;
     int x = (cx >> (lab_base_shift - 8)) & bitMask;
@@ -2894,9 +2906,9 @@ static inline void trilinearInterpolate(int cx, int cy, int cz, int* LUT,
     {\
         if(w[n])\
         {\
-            aa[n] = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z))];\
-            bb[n] = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 1];\
-            cc[n] = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 2];\
+            aa[n] = baseLUT[3*(_x) + 3*LAB_LUT_DIM*(_y) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(_z)];\
+            bb[n] = baseLUT[3*(_x) + 3*LAB_LUT_DIM*(_y) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(_z) + 1];\
+            cc[n] = baseLUT[3*(_x) + 3*LAB_LUT_DIM*(_y) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(_z) + 2];\
         }\
         else\
         {\
