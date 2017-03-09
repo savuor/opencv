@@ -3294,9 +3294,10 @@ struct RGB2Lab_b
                 trilinearPackedInterpolate(rvec0, gvec0, bvec0, RGB2LabLUT_s16, l_vec0, a_vec0, b_vec0);
                 trilinearPackedInterpolate(rvec1, gvec1, bvec1, RGB2LabLUT_s16, l_vec1, a_vec1, b_vec1);
 
-                //TODO: check: 255 or 256?
-                l_vec0 /= scaleReg; a_vec0 /= scaleReg; b_vec0 /= scaleReg;
-                l_vec1 /= scaleReg; a_vec1 /= scaleReg; b_vec1 /= scaleReg;
+                // (l, a, b) /= (LAB_BASE/256);
+                l_vec0 = l_vec0 >> (lab_base_shift - 8); l_vec1 = l_vec1 >> (lab_base_shift - 8);
+                a_vec0 = a_vec0 >> (lab_base_shift - 8); a_vec1 = a_vec1 >> (lab_base_shift - 8);
+                b_vec0 = b_vec0 >> (lab_base_shift - 8); b_vec1 = b_vec1 >> (lab_base_shift - 8);
 
                 v_uint8x16 u8_l = v_pack(l_vec0, l_vec1);
                 v_uint8x16 u8_a = v_pack(a_vec0, a_vec1);
@@ -3315,10 +3316,10 @@ struct RGB2Lab_b
                 int L, a, b;
                 trilinearInterpolate(R, G, B, RGB2LabLUT_s16, L, a, b);
 
-                //TODO: check: 255 or 256?
-                dst[i] = saturate_cast<uchar>(L/(LAB_BASE/255));
-                dst[i+1] = saturate_cast<uchar>(a/(LAB_BASE/255));
-                dst[i+2] = saturate_cast<uchar>(b/(LAB_BASE/255));
+                //here 256 is OK
+                dst[i] = saturate_cast<uchar>(L/(LAB_BASE/256));
+                dst[i+1] = saturate_cast<uchar>(a/(LAB_BASE/256));
+                dst[i+2] = saturate_cast<uchar>(b/(LAB_BASE/256));
             }
 
         }
