@@ -2394,19 +2394,11 @@ enum
     trilinear_shift = 8 - lab_lut_shift,
     TRILINEAR_BASE = (1 << trilinear_shift)
 };
-enum Cvt_Type
-{
-    RGB_TO_LAB, LAB_TO_RGB
-};
-static int Lab2RGBLUT_i32[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3];
-static int RGB2LabLUT_i32[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3];
-static int Lab2XYZLUT_i32[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3];
-static int XYZ2LabLUT_i32[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3];
-static float Lab2RGBLUT_f[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3];
-static float RGB2LabLUT_f[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3];
-static float Lab2XYZLUT_f[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3];
-static float XYZ2LabLUT_f[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3];
-int trilinearLUT[TRILINEAR_BASE*TRILINEAR_BASE*TRILINEAR_BASE*8];
+static int16_t Lab2RGBLUT_s16[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3*8];
+static int16_t RGB2LabLUT_s16[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3*8];
+static int16_t Lab2XYZLUT_s16[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3*8];
+static int16_t XYZ2LabLUT_s16[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3*8];
+static int16_t trilinearLUT[TRILINEAR_BASE*TRILINEAR_BASE*TRILINEAR_BASE*8];
 
 #define clip(value) \
     value < 0.0f ? 0.0f : value > 1.0f ? 1.0f : value;
@@ -2419,6 +2411,29 @@ static inline float applyGamma(float x)
 static inline float applyInvGamma(float x)
 {
     return x <= 0.0031308 ? x*12.92f : (float)(1.055*std::pow((double)x, 1./2.4) - 0.055);
+}
+
+static inline void writeToLUT(int p, int q, int r, int16_t* LUT, uint16_t a, uint16_t b, uint16_t c)
+{
+#define WRITE_VALS(_p, _q, _r) \
+    do\
+    {\
+        LUT[(p - (_p) + LAB_LUT_DIM*(q - (_q) + LAB_LUT_DIM*(r - (_q))))*3*8 + 4*(_p) + 2*(_q) + 1*(_r) +  0] = a;\
+        LUT[(p - (_p) + LAB_LUT_DIM*(q - (_q) + LAB_LUT_DIM*(r - (_q))))*3*8 + 4*(_p) + 2*(_q) + 1*(_r) +  8] = b;\
+        LUT[(p - (_p) + LAB_LUT_DIM*(q - (_q) + LAB_LUT_DIM*(r - (_q))))*3*8 + 4*(_p) + 2*(_q) + 1*(_r) + 16] = c;\
+    }\
+    while(0)
+
+    WRITE_VALS(0, 0, 0);
+    WRITE_VALS(0, 0, 1);
+    WRITE_VALS(0, 1, 0);
+    WRITE_VALS(0, 1, 1);
+    WRITE_VALS(1, 0, 0);
+    WRITE_VALS(1, 0, 1);
+    WRITE_VALS(1, 1, 0);
+    WRITE_VALS(1, 1, 1);
+
+#undef WRITE_VALS
 }
 
 static void initLabTabs()
@@ -2534,12 +2549,10 @@ static void initLabTabs()
                         float x = fxz[0], z = fxz[1];
 
                         //Lab(full range) => XYZ: x: [-0.0328753, 1.98139] y: [0, 1] z: [-0.0821883, 4.41094]
-                        Lab2XYZLUT_i32[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r]     = cvRound(LAB_BASE*(x+0.125f)/2.5f);
-                        Lab2XYZLUT_i32[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 1] = cvRound(LAB_BASE*y);
-                        Lab2XYZLUT_i32[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 2] = cvRound(LAB_BASE*(z+0.125f)/4.5f);
-                        Lab2XYZLUT_f[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r]     = (x+0.1f)/2.1f;
-                        Lab2XYZLUT_f[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 1] = y;
-                        Lab2XYZLUT_f[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 2] = (z+0.1f)/4.5f;
+                        writeToLUT(p, q, r, Lab2XYZLUT_s16,
+                                   cvRound(LAB_BASE*(x+0.125f)/2.5f),
+                                   cvRound(LAB_BASE*y),
+                                   cvRound(LAB_BASE*(z+0.125f)/4.5f));
 
                         float ro = C0 * x + C1 * y + C2 * z;
                         float go = C3 * x + C4 * y + C5 * z;
@@ -2552,12 +2565,10 @@ static void initLabTabs()
                         go = applyInvGamma(go);
                         bo = applyInvGamma(bo);
 
-                        Lab2RGBLUT_i32[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r]     = cvRound(LAB_BASE*ro);
-                        Lab2RGBLUT_i32[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 1] = cvRound(LAB_BASE*go);
-                        Lab2RGBLUT_i32[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 2] = cvRound(LAB_BASE*bo);
-                        Lab2RGBLUT_f[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r]     = ro;
-                        Lab2RGBLUT_f[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 1] = go;
-                        Lab2RGBLUT_f[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 2] = bo;
+                        writeToLUT(p, q, r, Lab2RGBLUT_s16,
+                                   cvRound(LAB_BASE*ro),
+                                   cvRound(LAB_BASE*go),
+                                   cvRound(LAB_BASE*bo));
 
                         //RGB 2 Lab LUT building
                         float R = 1.0*p/(LAB_LUT_DIM-1);
@@ -2580,12 +2591,10 @@ static void initLabTabs()
                         float a = 500.f * (FX - FY);
                         float b = 200.f * (FY - FZ);
 
-                        RGB2LabLUT_i32[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r]     = cvRound(LAB_BASE*L/100.0f);
-                        RGB2LabLUT_i32[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 1] = cvRound(LAB_BASE*(a+128.0f)/256.0f);
-                        RGB2LabLUT_i32[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 2] = cvRound(LAB_BASE*(b+128.0f)/256.0f);
-                        RGB2LabLUT_f[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r]     = L/100.0f;
-                        RGB2LabLUT_f[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 1] = (a+128.0f)/256.0f;
-                        RGB2LabLUT_f[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 2] = (b+128.0f)/256.0f;
+                        writeToLUT(p, q, r, RGB2LabLUT_s16,
+                                   cvRound(LAB_BASE*L/100.0f),
+                                   cvRound(LAB_BASE*(a+128.0f)/256.0f),
+                                   cvRound(LAB_BASE*(b+128.0f)/256.0f));
 
                         float xi = 1.0f*p/(LAB_LUT_DIM-1);
                         float yi = 1.0f*q/(LAB_LUT_DIM-1);
@@ -2599,25 +2608,23 @@ static void initLabTabs()
                         float ia = 500.f * (iFX - iFY);
                         float ib = 200.f * (iFY - iFZ);
 
-                        XYZ2LabLUT_i32[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r]     = cvRound(LAB_BASE*iL/100.0f);
-                        XYZ2LabLUT_i32[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 1] = cvRound(LAB_BASE*(ia+128.0f)/256.0f);
-                        XYZ2LabLUT_i32[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 2] = cvRound(LAB_BASE*(ib+128.0f)/256.0f);
-                        XYZ2LabLUT_f[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r]     = iL/100.0f;
-                        XYZ2LabLUT_f[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 1] = (ia+128.0f)/256.0f;
-                        XYZ2LabLUT_f[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 2] = (ib+128.0f)/256.0f;
+                        writeToLUT(p, q, r, XYZ2LabLUT_s16,
+                                   cvRound(LAB_BASE*iL/100.0f),
+                                   cvRound(LAB_BASE*(ia+128.0f)/256.0f),
+                                   cvRound(LAB_BASE*(ib+128.0f)/256.0f));
                     }
                 }
             }
             for(int p = 0; p < TRILINEAR_BASE; p++)
             {
-                int pp = TRILINEAR_BASE - p;
+                int16_t pp = TRILINEAR_BASE - p;
                 for(int q = 0; q < TRILINEAR_BASE; q++)
                 {
-                    int qq = TRILINEAR_BASE - q;
+                    int16_t qq = TRILINEAR_BASE - q;
                     for(int r = 0; r < TRILINEAR_BASE; r++)
                     {
-                        int rr = TRILINEAR_BASE - r;
-                        int* w = &trilinearLUT[8*p + 8*TRILINEAR_BASE*q + 8*TRILINEAR_BASE*TRILINEAR_BASE*r];
+                        int16_t rr = TRILINEAR_BASE - r;
+                        int16_t* w = &trilinearLUT[8*p + 8*TRILINEAR_BASE*q + 8*TRILINEAR_BASE*TRILINEAR_BASE*r];
                         w[0]  = pp * qq * rr; w[1]  = pp * qq * r ; w[2]  = pp * q  * rr; w[3]  = pp * q  * r ;
                         w[4]  = p  * qq * rr; w[5]  = p  * qq * r ; w[6]  = p  * q  * rr; w[7]  = p  * q  * r ;
                     }
@@ -2631,254 +2638,7 @@ static void initLabTabs()
 
 
 // cx, cy, cz are in [0; LAB_BASE]
-static inline void tetraInterpolate(int cx, int cy, int cz, int* LUT,
-                                    int& a, int& b, int& c)
-{
-    //LUT idx of origin pt of cube
-    int tx = cx >> (lab_base_shift - lab_lut_shift);
-    int ty = cy >> (lab_base_shift - lab_lut_shift);
-    int tz = cz >> (lab_base_shift - lab_lut_shift);
-
-    int* baseLUT = &LUT[3*tx + 3*LAB_LUT_DIM*ty + 3*LAB_LUT_DIM*LAB_LUT_DIM*tz];
-    int* p1, *p2;
-
-    //x, y, z are [0; LAB_BASE)
-    static const int bitMask = (1 << lab_base_shift) - 1;
-    int x = (cx << lab_lut_shift) & bitMask;
-    int y = (cy << lab_lut_shift) & bitMask;
-    int z = (cz << lab_lut_shift) & bitMask;
-
-    //sorted x, y, z
-    int s0, s1, s2;
-
-    if(x > y)
-    {
-        if(y > z)
-        {
-            const int x1 = 1, y1 = 0, z1 = 0;
-            const int x2 = 1, y2 = 1, z2 = 0;
-            p1 = &baseLUT[3*x1 + 3*LAB_LUT_DIM*y1 + 3*LAB_LUT_DIM*LAB_LUT_DIM*z1];
-            p2 = &baseLUT[3*x2 + 3*LAB_LUT_DIM*y2 + 3*LAB_LUT_DIM*LAB_LUT_DIM*z2];
-            s0 = x, s1 = y, s2 = z;
-        }
-        else if(x > z)
-        {
-            const int x1 = 1, y1 = 0, z1 = 0;
-            const int x2 = 1, y2 = 0, z2 = 1;
-            p1 = &baseLUT[3*x1 + 3*LAB_LUT_DIM*y1 + 3*LAB_LUT_DIM*LAB_LUT_DIM*z1];
-            p2 = &baseLUT[3*x2 + 3*LAB_LUT_DIM*y2 + 3*LAB_LUT_DIM*LAB_LUT_DIM*z2];
-            s0 = x, s1 = z, s2 = y;
-        }
-        else
-        {
-            const int x1 = 0, y1 = 0, z1 = 1;
-            const int x2 = 1, y2 = 0, z2 = 1;
-            p1 = &baseLUT[3*x1 + 3*LAB_LUT_DIM*y1 + 3*LAB_LUT_DIM*LAB_LUT_DIM*z1];
-            p2 = &baseLUT[3*x2 + 3*LAB_LUT_DIM*y2 + 3*LAB_LUT_DIM*LAB_LUT_DIM*z2];
-            s0 = z, s1 = x, s2 = y;
-        }
-    }
-    else
-    {
-        if(y > z)
-        {
-            if(x > z)
-            {
-                const int x1 = 0, y1 = 1, z1 = 0;
-                const int x2 = 1, y2 = 1, z2 = 0;
-                p1 = &baseLUT[3*x1 + 3*LAB_LUT_DIM*y1 + 3*LAB_LUT_DIM*LAB_LUT_DIM*z1];
-                p2 = &baseLUT[3*x2 + 3*LAB_LUT_DIM*y2 + 3*LAB_LUT_DIM*LAB_LUT_DIM*z2];
-                s0 = y, s1 = x, s2 = z;
-            }
-            else
-            {
-                const int x1 = 0, y1 = 1, z1 = 0;
-                const int x2 = 0, y2 = 1, z2 = 1;
-                p1 = &baseLUT[3*x1 + 3*LAB_LUT_DIM*y1 + 3*LAB_LUT_DIM*LAB_LUT_DIM*z1];
-                p2 = &baseLUT[3*x2 + 3*LAB_LUT_DIM*y2 + 3*LAB_LUT_DIM*LAB_LUT_DIM*z2];
-                s0 = y, s1 = z, s2 = x;
-            }
-        }
-        else
-        {
-            const int x1 = 0, y1 = 0, z1 = 1;
-            const int x2 = 0, y2 = 1, z2 = 1;
-            p1 = &baseLUT[3*x1 + 3*LAB_LUT_DIM*y1 + 3*LAB_LUT_DIM*LAB_LUT_DIM*z1];
-            p2 = &baseLUT[3*x2 + 3*LAB_LUT_DIM*y2 + 3*LAB_LUT_DIM*LAB_LUT_DIM*z2];
-            s0 = z, s1 = y, s2 = x;
-        }
-    }
-
-    //weights and values
-    int w0 = LAB_BASE - s0, w1 = s0 - s1, w2 = s1 - s2, w3 = s2;
-    int a0, a1, a2, a3, b0, b1, b2, b3, c0, c1, c2, c3;
-
-    //in case of going out of LUT bounds the corresponding weights will be zero
-    if(w0)
-    {
-        a0 = baseLUT[0];
-        b0 = baseLUT[1];
-        c0 = baseLUT[2];
-    }
-    else
-    {
-        a0 = b0 = c0 = 0;
-    }
-    if(w1)
-    {
-        a1 = p1[0];
-        b1 = p1[1];
-        c1 = p1[2];
-    }
-    else
-    {
-        a1 = b1 = c1 = 0;
-    }
-    if(w2)
-    {
-        a2 = p2[0];
-        b2 = p2[1];
-        c2 = p2[2];
-    }
-    else
-    {
-        a2 = b2 = c2 = 0;
-    }
-    if(w3)
-    {
-        a3 = baseLUT[3*1 + 3*LAB_LUT_DIM*1 + 3*LAB_LUT_DIM*LAB_LUT_DIM*1];
-        b3 = baseLUT[3*1 + 3*LAB_LUT_DIM*1 + 3*LAB_LUT_DIM*LAB_LUT_DIM*1 + 1];
-        c3 = baseLUT[3*1 + 3*LAB_LUT_DIM*1 + 3*LAB_LUT_DIM*LAB_LUT_DIM*1 + 2];
-    }
-    else
-    {
-        a3 = b3 = c3 = 0;
-    }
-
-#undef SETPT
-
-    a = CV_DESCALE(a0*w0 + a1*w1 + a2*w2 + a3*w3, lab_base_shift);
-    b = CV_DESCALE(b0*w0 + b1*w1 + b2*w2 + b3*w3, lab_base_shift);
-    c = CV_DESCALE(c0*w0 + c1*w1 + c2*w2 + c3*w3, lab_base_shift);
-}
-
-
-static inline void tetraFloatInterpolate(float cx, float cy, float cz, float* LUT,
-                                         float& a, float& b, float& c)
-{
-    cx = (cx >= 0) ? (cx <= 1.0f ? cx : 1.0f) : 0;
-    cy = (cy >= 0) ? (cy <= 1.0f ? cy : 1.0f) : 0;
-    cz = (cz >= 0) ? (cz <= 1.0f ? cz : 1.0f) : 0;
-
-    //LUT idx of origin pt of cube
-    int tx = cvFloor(cx*(LAB_LUT_DIM-1));
-    int ty = cvFloor(cy*(LAB_LUT_DIM-1));
-    int tz = cvFloor(cz*(LAB_LUT_DIM-1));
-
-    //x, y, z are [0; 1)
-    float x = cx*(LAB_LUT_DIM-1) - tx;
-    float y = cy*(LAB_LUT_DIM-1) - ty;
-    float z = cz*(LAB_LUT_DIM-1) - tz;
-
-#define SETPT(n, _x, _y, _z) \
-    do\
-        if(abs(w##n) > FLT_EPSILON)\
-        {\
-            a##n = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z))];\
-            b##n = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 1];\
-            c##n = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 2];\
-        }\
-        else\
-        {\
-            a##n = b##n = c##n = 0;\
-        }\
-    while(0)
-
-    float w0, w1, w2, w3;
-    float a0, a1, a2, a3, b0, b1, b2, b3, c0, c1, c2, c3;
-
-    if(x > y)
-    {
-        if(y > z)
-        {
-            w0 = 1.0f - x; w1 = x - y; w2 = y - z; w3 = z;
-            SETPT(1, 1, 0, 0);
-            SETPT(2, 1, 1, 0);
-        }
-        else if(x > z)
-        {
-            w0 = 1.0f - x; w1 = x - z; w2 = z - y; w3 = y;
-            SETPT(1, 1, 0, 0);
-            SETPT(2, 1, 0, 1);
-        }
-        else
-        {
-            w0 = 1.0f - z; w1 = z - x; w2 = x - y; w3 = y;
-            SETPT(1, 0, 0, 1);
-            SETPT(2, 1, 0, 1);
-        }
-    }
-    else
-    {
-        if(y > z)
-        {
-            if(x > z)
-            {
-                w0 = 1.0f - y; w1 = y - x; w2 = x - z; w3 = z;
-                SETPT(1, 0, 1, 0);
-                SETPT(2, 1, 1, 0);
-            }
-            else
-            {
-                w0 = 1.0f - y; w1 = y - z; w2 = z - x; w3 = x;
-                SETPT(1, 0, 1, 0);
-                SETPT(2, 0, 1, 1);
-            }
-        }
-        else
-        {
-            w0 = 1.0f - z; w1 = z - y; w2 = y - x; w3 = x;
-            SETPT(1, 0, 0, 1);
-            SETPT(2, 0, 1, 1);
-        }
-    }
-
-    SETPT(0, 0, 0, 0);
-    SETPT(3, 1, 1, 1);
-
-#undef SETPT
-
-    a = a0*w0 + a1*w1 + a2*w2 + a3*w3;
-    b = b0*w0 + b1*w1 + b2*w2 + b3*w3;
-    c = c0*w0 + c1*w1 + c2*w2 + c3*w3;
-}
-
-
-static inline void noInterpolate(int cx, int cy, int cz, int* LUT,
-                                 int& a, int& b, int& c)
-{
-    cx = (cx >= 0) ? (cx <= LAB_BASE ? cx : LAB_BASE) : 0;
-    cy = (cy >= 0) ? (cy <= LAB_BASE ? cy : LAB_BASE) : 0;
-    cz = (cz >= 0) ? (cz <= LAB_BASE ? cz : LAB_BASE) : 0;
-
-    //LUT idx of origin pt of cube
-    int tx = cx >> (lab_base_shift - lab_lut_shift);
-    int ty = cy >> (lab_base_shift - lab_lut_shift);
-    int tz = cz >> (lab_base_shift - lab_lut_shift);
-
-    int a0, b0, c0;
-
-    a0 = LUT[3*tx + 3*LAB_LUT_DIM*ty + 3*LAB_LUT_DIM*LAB_LUT_DIM*tz];
-    b0 = LUT[3*tx + 3*LAB_LUT_DIM*ty + 3*LAB_LUT_DIM*LAB_LUT_DIM*tz + 1];
-    c0 = LUT[3*tx + 3*LAB_LUT_DIM*ty + 3*LAB_LUT_DIM*LAB_LUT_DIM*tz + 2];
-
-    a = a0;
-    b = b0;
-    c = c0;
-}
-
-// cx, cy, cz are in [0; LAB_BASE]
-static inline void trilinearInterpolate(int cx, int cy, int cz, int* LUT,
+static inline void trilinearInterpolate(int cx, int cy, int cz, int16_t* LUT,
                                         int& a, int& b, int& c)
 {
     //LUT idx of origin pt of cube
@@ -2886,7 +2646,12 @@ static inline void trilinearInterpolate(int cx, int cy, int cz, int* LUT,
     int ty = cy >> (lab_base_shift - lab_lut_shift);
     int tz = cz >> (lab_base_shift - lab_lut_shift);
 
-    int* baseLUT = &LUT[3*tx + 3*LAB_LUT_DIM*ty + 3*LAB_LUT_DIM*LAB_LUT_DIM*tz];
+    int16_t* baseLUT = &LUT[3*8*tx + (3*8*LAB_LUT_DIM)*ty + (3*8*LAB_LUT_DIM*LAB_LUT_DIM)*tz];
+    int aa[8], bb[8], cc[8];
+    for(int i = 0; i < 8; i++)
+    {
+        aa[i] = baseLUT[i]; bb[i] = baseLUT[i+8]; cc[i] = baseLUT[i+16];
+    }
 
     //x, y, z are [0; TRILINEAR_BASE)
     static const int bitMask = (1 << trilinear_shift) - 1;
@@ -2895,38 +2660,10 @@ static inline void trilinearInterpolate(int cx, int cy, int cz, int* LUT,
     int z = (cz >> (lab_base_shift - 8)) & bitMask;
 
     int w[8];
-    int aa[8], bb[8], cc[8];
     for(int i = 0; i < 8; i++)
     {
         w[i] = trilinearLUT[8*x + 8*TRILINEAR_BASE*y + 8*TRILINEAR_BASE*TRILINEAR_BASE*z + i];
     }
-
-#define SETPT(n, _x, _y, _z) \
-    do\
-    {\
-        if(w[n])\
-        {\
-            aa[n] = baseLUT[3*(_x) + 3*LAB_LUT_DIM*(_y) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(_z)];\
-            bb[n] = baseLUT[3*(_x) + 3*LAB_LUT_DIM*(_y) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(_z) + 1];\
-            cc[n] = baseLUT[3*(_x) + 3*LAB_LUT_DIM*(_y) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(_z) + 2];\
-        }\
-        else\
-        {\
-            aa[n] = bb[n] = cc[n] = 0;\
-        }\
-    }\
-    while(0)
-
-    SETPT(0, 0, 0, 0);
-    SETPT(1, 0, 0, 1);
-    SETPT(2, 0, 1, 0);
-    SETPT(3, 0, 1, 1);
-    SETPT(4, 1, 0, 0);
-    SETPT(5, 1, 0, 1);
-    SETPT(6, 1, 1, 0);
-    SETPT(7, 1, 1, 1);
-
-#undef SETPT
 
     a = aa[0]*w[0]+aa[1]*w[1]+aa[2]*w[2]+aa[3]*w[3]+aa[4]*w[4]+aa[5]*w[5]+aa[6]*w[6]+aa[7]*w[7];
     b = bb[0]*w[0]+bb[1]*w[1]+bb[2]*w[2]+bb[3]*w[3]+bb[4]*w[4]+bb[5]*w[5]+bb[6]*w[6]+bb[7]*w[7];
@@ -2938,187 +2675,152 @@ static inline void trilinearInterpolate(int cx, int cy, int cz, int* LUT,
 }
 
 
-static inline void trilinearFloatInterpolate(float cx, float cy, float cz, float* LUT,
-                                             float& a, float& b, float& c)
+// 8 inValues are in [0; LAB_BASE]
+static inline void trilinearPackedInterpolate(const v_uint16x8 inX, const v_uint16x8 inY, const v_uint16x8 inZ,
+                                              const int16_t* LUT,
+                                              v_uint16x8& outA, v_uint16x8& outB, v_uint16x8& outC)
 {
-    cx = (cx >= 0) ? (cx <= 1.0f ? cx : 1.0f) : 0;
-    cy = (cy >= 0) ? (cy <= 1.0f ? cy : 1.0f) : 0;
-    cz = (cz >= 0) ? (cz <= 1.0f ? cz : 1.0f) : 0;
-
     //LUT idx of origin pt of cube
-    int tx = cvFloor(cx*(LAB_LUT_DIM-1));
-    int ty = cvFloor(cy*(LAB_LUT_DIM-1));
-    int tz = cvFloor(cz*(LAB_LUT_DIM-1));
+    v_uint16x8 idxsX = inX >> (lab_base_shift - lab_lut_shift);
+    v_uint16x8 idxsY = inY >> (lab_base_shift - lab_lut_shift);
+    v_uint16x8 idxsZ = inZ >> (lab_base_shift - lab_lut_shift);
 
-    //x, y, z are [0; 1)
-    float x = cx*(LAB_LUT_DIM-1) - tx;
-    float y = cy*(LAB_LUT_DIM-1) - ty;
-    float z = cz*(LAB_LUT_DIM-1) - tz;
+    //x, y, z are [0; TRILINEAR_BASE)
+    const uint16_t bitMask = (1 << trilinear_shift) - 1;
+    v_uint16x8 bitMaskReg = v_setall_u16(bitMask);
+    v_uint16x8 fracX = (inX >> (lab_base_shift - 8)) & bitMaskReg;
+    v_uint16x8 fracY = (inY >> (lab_base_shift - 8)) & bitMaskReg;
+    v_uint16x8 fracZ = (inZ >> (lab_base_shift - 8)) & bitMaskReg;
 
-    float w[8];
-    float aa[8], bb[8], cc[8];
+    //load values to interpolate for pix0, pix1, .., pix7
+    int16_t* addr0, *addr1, *addr2, *addr3, *addr4, *addr5, *addr6, *addr7;
+    v_int16x8 a0, a1, a2, a3, a4, a5, a6, a7;
+    v_int16x8 b0, b1, b2, b3, b4, b5, b6, b7;
+    v_int16x8 c0, c1, c2, c3, c4, c5, c6, c7;
 
-#define SETPT(n, _x, _y, _z) \
-    do\
-    {\
-        w[n]  = (_x) ? x : (1.0f - x);\
-        w[n] *= (_y) ? y : (1.0f - y);\
-        w[n] *= (_z) ? z : (1.0f - z);\
-        aa[n] = bb[n] = cc[n] = 0;\
-        if(abs(w[n]) > FLT_EPSILON)\
-        {\
-            (aa[n]) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z))];\
-            (bb[n]) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 1];\
-            (cc[n]) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 2];\
-        }\
-    }\
-    while(0)
+    v_uint16x8 lutAddrs = v_setall_u16(3*8)*idxsX +
+                          v_setall_u16(3*8*LAB_LUT_DIM)*idxsY +
+                          v_setall_u16(3*8*LAB_LUT_DIM*LAB_LUT_DIM)*idxsZ;
+    v_uint32x4 dw0, dw1;
+    v_expand(lutAddrs, dw0, dw1);
 
-    SETPT(0, 0, 0, 0);
-    SETPT(1, 0, 0, 1);
-    SETPT(2, 0, 1, 0);
-    SETPT(3, 0, 1, 1);
-    SETPT(4, 1, 0, 0);
-    SETPT(5, 1, 0, 1);
-    SETPT(6, 1, 1, 0);
-    SETPT(7, 1, 1, 1);
+#if SIZE_MAX > UINT_MAX
+    //64-bit code
+    v_uint64x2 qw0, qw1, qw2, qw3;
+    v_expand(dw0, qw0, qw1); v_expand(dw1, qw2, qw3);
+    qw0 += v_setall_u64((uint64)LUT);
+    qw1 += v_setall_u64((uint64)LUT);
+    qw2 += v_setall_u64((uint64)LUT);
+    qw3 += v_setall_u64((uint64)LUT);
 
-#undef SETPT
+    addr0 = (int16_t*)(qw0.get0());
+    addr1 = (int16_t*)(v_extract<1>(qw0, v_setzero_u64()).get0());
+    addr2 = (int16_t*)(qw1.get0());
+    addr3 = (int16_t*)(v_extract<1>(qw1, v_setzero_u64()).get0());
+    addr4 = (int16_t*)(qw2.get0());
+    addr5 = (int16_t*)(v_extract<1>(qw2, v_setzero_u64()).get0());
+    addr6 = (int16_t*)(qw3.get0());
+    addr7 = (int16_t*)(v_extract<1>(qw3, v_setzero_u64()).get0());
+#else
+    //32-bit code
+    dw0 += v_setall_u32((unsigned)LUT);
+    dw1 += v_setall_u32((unsigned)LUT);
 
-    a = b = c = 0;
-    for(int i = 0; i < 8; i++)
-    {
-        a += aa[i]*w[i];
-        b += bb[i]*w[i];
-        c += cc[i]*w[i];
-    }
-}
+    addr0 = (int16_t*)(dw0.get0());
+    addr1 = (int16_t*)(v_extract<1>(dw0, v_setzero_u32()).get0());
+    addr2 = (int16_t*)(v_extract<2>(dw0, v_setzero_u32()).get0());
+    addr3 = (int16_t*)(v_extract<3>(dw0, v_setzero_u32()).get0());
+    addr4 = (int16_t*)(dw1.get0());
+    addr5 = (int16_t*)(v_extract<1>(dw1, v_setzero_u32()).get0());
+    addr6 = (int16_t*)(v_extract<2>(dw1, v_setzero_u32()).get0());
+    addr7 = (int16_t*)(v_extract<3>(dw1, v_setzero_u32()).get0());
+#endif
 
+    a0 = v_load(addr0); b0 = v_load(addr0 + 8); c0 = v_load(addr0 + 16);
+    a1 = v_load(addr1); b1 = v_load(addr1 + 8); c1 = v_load(addr1 + 16);
+    a2 = v_load(addr2); b2 = v_load(addr2 + 8); c1 = v_load(addr2 + 16);
+    a3 = v_load(addr1); b3 = v_load(addr3 + 8); c1 = v_load(addr3 + 16);
+    a4 = v_load(addr1); b4 = v_load(addr4 + 8); c1 = v_load(addr4 + 16);
+    a5 = v_load(addr1); b5 = v_load(addr5 + 8); c1 = v_load(addr5 + 16);
+    a6 = v_load(addr1); b6 = v_load(addr6 + 8); c1 = v_load(addr6 + 16);
+    a7 = v_load(addr1); b7 = v_load(addr7 + 8); c1 = v_load(addr7 + 16);
 
-enum InterType
-{
-    LAB_INTER_NO,
-    LAB_INTER_TETRA,
-    LAB_INTER_TRILINEAR,
-};
-static InterType interType = LAB_INTER_NO;
-static bool useXYZTable = false;
-static bool useFloatVersion = true;
+    //interpolation weights for pix0, pix1, .., pix7
+    v_int16x8 w0, w1, w2, w3, w4, w5, w6, w7;
+    v_uint16x8 wAddrs = v_setall_u16(8)*fracX +
+                        v_setall_u16(8*TRILINEAR_BASE)*fracY +
+                        v_setall_u16(8*TRILINEAR_BASE*TRILINEAR_BASE)*fracZ;
+    v_expand(wAddrs, dw0, dw1);
 
-static inline void chooseInterpolate(float cx, float cy, float cz, Cvt_Type type,
-                                     float& a, float& b, float& c)
-{
-    int ia, ib, ic, icx = cx*LAB_BASE, icy = cy*LAB_BASE, icz = cz*LAB_BASE;
-    float fa, fb, fc, fcx = cx, fcy = cy, fcz = cz;
-    float* fLUT; int*   iLUT;
-    if(useXYZTable)
-    {
-        fLUT = type == LAB_TO_RGB ? Lab2XYZLUT_f : XYZ2LabLUT_f;
-        iLUT = type == LAB_TO_RGB ? Lab2XYZLUT_i32 : XYZ2LabLUT_i32;
-    }
-    else
-    {
-        fLUT = type == LAB_TO_RGB ? Lab2RGBLUT_f : RGB2LabLUT_f;
-        iLUT = type == LAB_TO_RGB ? Lab2RGBLUT_i32 : RGB2LabLUT_i32;
-    }
-    bool isFloat = false;
-    switch (interType)
-    {
-    case LAB_INTER_NO:
-        noInterpolate(icx, icy, icz, iLUT, ia, ib, ic);
-        break;
-    case LAB_INTER_TETRA:
-        if(useFloatVersion)
-        {
-            tetraFloatInterpolate(fcx, fcy, fcz, fLUT, fa, fb, fc);
-        }
-        else
-        {
-            tetraInterpolate(icx, icy, icz, iLUT, ia, ib, ic);
-        }
-        isFloat = useFloatVersion;
-        break;
-    case LAB_INTER_TRILINEAR:
-        if(useFloatVersion)
-        {
-            trilinearFloatInterpolate(fcx, fcy, fcz, fLUT, fa, fb, fc);
-        }
-        else
-        {
-            trilinearInterpolate(icx, icy, icz, iLUT, ia, ib, ic);
-        }
-        isFloat = useFloatVersion;
-        break;
-    default:
-        break;
-    }
-    if(isFloat)
-    {
-        a = fa, b = fb, c = fc;
-    }
-    else
-    {
-        a = ia*1.0f/LAB_BASE, b = ib*1.0f/LAB_BASE, c = ic*1.0f/LAB_BASE;
-    }
-}
+#if SIZE_MAX > UINT_MAX
+    //64-bit code
+    v_expand(dw0, qw0, qw1); v_expand(dw1, qw2, qw3);
 
+    v_uint64x2 wBaseAddr0 = v_setall_u64((uint64_t)trilinearLUT) + qw0;
+    v_uint64x2 wBaseAddr2 = v_setall_u64((uint64_t)trilinearLUT) + qw1;
+    v_uint64x2 wBaseAddr4 = v_setall_u64((uint64_t)trilinearLUT) + qw2;
+    v_uint64x2 wBaseAddr6 = v_setall_u64((uint64_t)trilinearLUT) + qw3;
 
-static inline void chooseInterpolate(int cx, int cy, int cz, Cvt_Type type,
-                                     int& a, int& b, int& c)
-{
-    int ia, ib, ic;
-    int icx = cx, icy = cy, icz = cz;
-    float fa, fb, fc, fcx = cx/255.0f, fcy = cy/255.0f, fcz = cz/255.0f;
-    float* fLUT; int*   iLUT;
-    if(useXYZTable)
-    {
-        fLUT = type == LAB_TO_RGB ? Lab2XYZLUT_f : XYZ2LabLUT_f;
-        iLUT = type == LAB_TO_RGB ? Lab2XYZLUT_i32 : XYZ2LabLUT_i32;
-    }
-    else
-    {
-        fLUT = type == LAB_TO_RGB ? Lab2RGBLUT_f : RGB2LabLUT_f;
-        iLUT = type == LAB_TO_RGB ? Lab2RGBLUT_i32 : RGB2LabLUT_i32;
-    }
-    bool isFloat = false;
-    switch (interType)
-    {
-    case LAB_INTER_NO:
-        noInterpolate(icx, icy, icz, iLUT, ia, ib, ic);
-        break;
-    case LAB_INTER_TETRA:
-        if(useFloatVersion)
-        {
-            tetraFloatInterpolate(fcx, fcy, fcz, fLUT, fa, fb, fc);
-        }
-        else
-        {
-            tetraInterpolate(icx, icy, icz, iLUT, ia, ib, ic);
-        }
-        isFloat = useFloatVersion;
-        break;
-    case LAB_INTER_TRILINEAR:
-        if(useFloatVersion)
-        {
-            trilinearFloatInterpolate(fcx, fcy, fcz, fLUT, fa, fb, fc);
-        }
-        else
-        {
-            trilinearInterpolate(icx, icy, icz, iLUT, ia, ib, ic);
-        }
-        isFloat = useFloatVersion;
-        break;
-    default:
-        break;
-    }
-    if(isFloat)
-    {
-        a = fa*255.0f, b = fb*255.0f, c = fc*255.0f;
-    }
-    else
-    {
-        a = ia, b = ib, c = ic;
-    }
+    w0 = v_load((int16_t*)wBaseAddr0.get0());
+    w1 = v_load((int16_t*)v_extract<1>(wBaseAddr0, v_setzero_u64()).get0());
+    w2 = v_load((int16_t*)wBaseAddr2.get0());
+    w3 = v_load((int16_t*)v_extract<1>(wBaseAddr2, v_setzero_u64()).get0());
+    w4 = v_load((int16_t*)wBaseAddr4.get0());
+    w5 = v_load((int16_t*)v_extract<1>(wBaseAddr4, v_setzero_u64()).get0());
+    w6 = v_load((int16_t*)wBaseAddr6.get0());
+    w7 = v_load((int16_t*)v_extract<1>(wBaseAddr6, v_setzero_u64()).get0());
+#else
+    //32-bit code
+    v_uint32x4 wBaseAddr0 = v_setall_u32((uint32_t)trilinearLUT) + dw0;
+    v_uint32x4 wBaseAddr1 = v_setall_u32((uint32_t)trilinearLUT) + dw1;
+
+    w0 = v_load((int16_t*)wBaseAddr0.get0());
+    w1 = v_load((int16_t*)v_extract<1>(wBaseAddr0, v_setzero_u32()).get0());
+    w2 = v_load((int16_t*)v_extract<2>(wBaseAddr0, v_setzero_u32()).get0());
+    w3 = v_load((int16_t*)v_extract<3>(wBaseAddr0, v_setzero_u32()).get0());
+    w4 = v_load((int16_t*)wBaseAddr1.get0());
+    w5 = v_load((int16_t*)v_extract<1>(wBaseAddr1, v_setzero_u32()).get0());
+    w6 = v_load((int16_t*)v_extract<2>(wBaseAddr1, v_setzero_u32()).get0());
+    w7 = v_load((int16_t*)v_extract<3>(wBaseAddr1, v_setzero_u32()).get0());
+#endif
+
+    //outA = descale(v_reg<8>(sum(dot(ai, wi))))
+    v_uint32x4 part0, part1;
+    part0 = v_uint32x4(v_reduce_sum(v_dotprod(a0, w0)),
+                       v_reduce_sum(v_dotprod(a1, w1)),
+                       v_reduce_sum(v_dotprod(a2, w2)),
+                       v_reduce_sum(v_dotprod(a3, w3)));
+    part1 = v_uint32x4(v_reduce_sum(v_dotprod(a4, w4)),
+                       v_reduce_sum(v_dotprod(a5, w5)),
+                       v_reduce_sum(v_dotprod(a6, w6)),
+                       v_reduce_sum(v_dotprod(a7, w7)));
+    part0 = (part0 + v_setall_u32(1 << (trilinear_shift*3-1))) >> (trilinear_shift*3);
+    part1 = (part1 + v_setall_u32(1 << (trilinear_shift*3-1))) >> (trilinear_shift*3);
+    outA = v_pack(part0, part1);
+
+    part0 = v_uint32x4(v_reduce_sum(v_dotprod(b0, w0)),
+                       v_reduce_sum(v_dotprod(b1, w1)),
+                       v_reduce_sum(v_dotprod(b2, w2)),
+                       v_reduce_sum(v_dotprod(b3, w3)));
+    part1 = v_uint32x4(v_reduce_sum(v_dotprod(b4, w4)),
+                       v_reduce_sum(v_dotprod(b5, w5)),
+                       v_reduce_sum(v_dotprod(b6, w6)),
+                       v_reduce_sum(v_dotprod(b7, w7)));
+    part0 = (part0 + v_setall_u32(1 << (trilinear_shift*3-1))) >> (trilinear_shift*3);
+    part1 = (part1 + v_setall_u32(1 << (trilinear_shift*3-1))) >> (trilinear_shift*3);
+    outB = v_pack(part0, part1);
+
+    part0 = v_uint32x4(v_reduce_sum(v_dotprod(c0, w0)),
+                       v_reduce_sum(v_dotprod(c1, w1)),
+                       v_reduce_sum(v_dotprod(c2, w2)),
+                       v_reduce_sum(v_dotprod(c3, w3)));
+    part1 = v_uint32x4(v_reduce_sum(v_dotprod(c4, w4)),
+                       v_reduce_sum(v_dotprod(c5, w5)),
+                       v_reduce_sum(v_dotprod(c6, w6)),
+                       v_reduce_sum(v_dotprod(c7, w7)));
+    part0 = (part0 + v_setall_u32(1 << (trilinear_shift*3-1))) >> (trilinear_shift*3);
+    part1 = (part1 + v_setall_u32(1 << (trilinear_shift*3-1))) >> (trilinear_shift*3);
+    outC = v_pack(part0, part1);
 }
 
 
@@ -3167,29 +2869,18 @@ struct RGB2Lab_f
         i = 0;
         if(useTetraInterpolation)
         {
+            //TODO: add packed version
+
             for(; i < n; i += 3, src += scn)
             {
                 float R = clip(src[bIdx]);
                 float G = clip(src[1]);
                 float B = clip(src[bIdx^2]);
 
-                if(useXYZTable)
-                {
-                    if (gammaTab)
-                    {
-                        R = splineInterpolate(R * gscale, gammaTab, GAMMA_TAB_SIZE);
-                        G = splineInterpolate(G * gscale, gammaTab, GAMMA_TAB_SIZE);
-                        B = splineInterpolate(B * gscale, gammaTab, GAMMA_TAB_SIZE);
-                    }
-
-                    float X = R*C0 + G*C1 + B*C2;
-                    float Y = R*C3 + G*C4 + B*C5;
-                    float Z = R*C6 + G*C7 + B*C8;
-                    R = X, G = Y, B = Z;
-                }
-
-                float L, a, b;
-                chooseInterpolate(R, G, B, RGB_TO_LAB, L, a, b);
+                //don't use XYZ table in RGB2Lab conversion
+                int iR = R*LAB_BASE, iG = G*LAB_BASE, iB = B*LAB_BASE, iL, ia, ib;
+                trilinearInterpolate(iR, iG, iB, RGB2LabLUT_s16, iL, ia, ib);
+                float L = iL*1.0f/LAB_BASE, a = ia*1.0f/LAB_BASE, b = ib*1.0f/LAB_BASE;
 
                 dst[i] = L*100.0f;
                 dst[i + 1] = a*256.0f - 128.0f;
@@ -3369,34 +3060,34 @@ struct Lab2RGB_f
 
         if(useTetraInterpolation)
         {
+            //TODO: insert packed version
+
             for (; i < n; i += 3, dst += dcn)
             {
                 float li = src[i];
                 float ai = src[i + 1];
                 float bi = src[i + 2];
 
+                //use XYZ table in Lab2RGB conversion
+                int il = li/100.0f*LAB_BASE, ia = (ai+128.0f)/256.0f*LAB_BASE, ib = (bi+128.0f)/256.0f*LAB_BASE;
+                int iX, iY, iZ;
+                trilinearInterpolate(il, ia, ib, Lab2XYZLUT_s16, iX, iY, iZ);
+
                 float ro, go, bo;
+                //Lab(full range) => XYZ: x: [-0.0328753, 1.98139] y: [0, 1] z: [-0.0821883, 4.41094]
+                float x = (iX*1.0f/LAB_BASE)*2.5f-0.125f, y = (iY*1.0f/LAB_BASE), z = (iZ*1.0f/LAB_BASE)*4.5f-0.125f;
+                ro = C0 * x + C1 * y + C2 * z;
+                go = C3 * x + C4 * y + C5 * z;
+                bo = C6 * x + C7 * y + C8 * z;
+                ro = clip(ro);
+                go = clip(go);
+                bo = clip(bo);
 
-                chooseInterpolate(li/100.0f, (ai+128.0f)/256.0f, (bi+128.0f)/256.0f,
-                                  LAB_TO_RGB, ro, go, bo);
-
-                if(useXYZTable)
+                if (gammaTab)
                 {
-                    //Lab(full range) => XYZ: x: [-0.0328753, 1.98139] y: [0, 1] z: [-0.0821883, 4.41094]
-                    float x = ro*2.5f-0.125f, y = go, z = bo*4.5f-0.125f;
-                    ro = C0 * x + C1 * y + C2 * z;
-                    go = C3 * x + C4 * y + C5 * z;
-                    bo = C6 * x + C7 * y + C8 * z;
-                    ro = clip(ro);
-                    go = clip(go);
-                    bo = clip(bo);
-
-                    if (gammaTab)
-                    {
-                        ro = splineInterpolate(ro * gscale, gammaTab, GAMMA_TAB_SIZE);
-                        go = splineInterpolate(go * gscale, gammaTab, GAMMA_TAB_SIZE);
-                        bo = splineInterpolate(bo * gscale, gammaTab, GAMMA_TAB_SIZE);
-                    }
+                    ro = splineInterpolate(ro * gscale, gammaTab, GAMMA_TAB_SIZE);
+                    go = splineInterpolate(go * gscale, gammaTab, GAMMA_TAB_SIZE);
+                    bo = splineInterpolate(bo * gscale, gammaTab, GAMMA_TAB_SIZE);
                 }
 
                 dst[bIdx] = ro, dst[1] = go, dst[bIdx^2] = bo;
@@ -3579,36 +3270,57 @@ struct RGB2Lab_b
         i = 0;
         if(useTetraInterpolation)
         {
+            for(; i < n; i += 3*8*2, src += scn*8*2)
+            {
+                v_uint8x16 u8r, u8g, u8b;
+                v_uint16x8 rvec0, rvec1, gvec0, gvec1, bvec0, bvec1, dummy;
+                v_load_deinterleave(src, u8r, u8g, u8b);
+                v_expand(u8r, rvec0, rvec1);
+                v_expand(u8g, gvec0, gvec1);
+                v_expand(u8b, bvec0, bvec1);
+
+                if(bIdx > 0)
+                {
+                    dummy = rvec0; rvec0 = bvec0; bvec0 = dummy;
+                    dummy = rvec1; rvec1 = bvec1; bvec1 = dummy;
+                }
+
+                v_uint16x8 scaleReg = v_setall_u16(LAB_BASE/255);
+                rvec0 *= scaleReg; gvec0 *= scaleReg; bvec0 *= scaleReg;
+                rvec1 *= scaleReg; gvec1 *= scaleReg; bvec1 *= scaleReg;
+
+                //don't use XYZ table for RGB2Lab
+                v_uint16x8 l_vec0, l_vec1, a_vec0, a_vec1, b_vec0, b_vec1;
+                trilinearPackedInterpolate(rvec0, gvec0, bvec0, RGB2LabLUT_s16, l_vec0, a_vec0, b_vec0);
+                trilinearPackedInterpolate(rvec1, gvec1, bvec1, RGB2LabLUT_s16, l_vec1, a_vec1, b_vec1);
+
+                //TODO: check: 255 or 256?
+                l_vec0 /= scaleReg; a_vec0 /= scaleReg; b_vec0 /= scaleReg;
+                l_vec1 /= scaleReg; a_vec1 /= scaleReg; b_vec1 /= scaleReg;
+
+                v_uint8x16 u8_l = v_pack(l_vec0, l_vec1);
+                v_uint8x16 u8_a = v_pack(a_vec0, a_vec1);
+                v_uint8x16 u8_b = v_pack(b_vec0, b_vec1);
+
+                v_store_interleave(dst, u8_l, u8_a, u8_b);
+            }
+
             for(; i < n; i += 3, src += scn)
             {
                 int R = src[bIdx], G = src[1], B = src[bIdx^2];
 
-                if(useXYZTable)
-                {
-                    R = tab[R], G = tab[G], B = tab[B];
-
-                    int fX = CV_DESCALE(R*C0 + G*C1 + B*C2, gamma_shift);
-                    int fY = CV_DESCALE(R*C3 + G*C4 + B*C5, gamma_shift);
-                    int fZ = CV_DESCALE(R*C6 + G*C7 + B*C8, gamma_shift);
-
-                    //fX, fY, fZ are shifted on lab_shift and x255 at tab
-                    R = (fX << (lab_base_shift - lab_shift))/255;
-                    G = (fY << (lab_base_shift - lab_shift))/255;
-                    B = (fZ << (lab_base_shift - lab_shift))/255;
-                }
-                else
-                {
-                    R = R*LAB_BASE/255, G = G*LAB_BASE/255, B = B*LAB_BASE/255;
-                }
+                //don't use XYZ table for RGB2Lab
+                R = R*LAB_BASE/255, G = G*LAB_BASE/255, B = B*LAB_BASE/255;
 
                 int L, a, b;
-                chooseInterpolate(R, G, B, RGB_TO_LAB, L, a, b);
+                trilinearInterpolate(R, G, B, RGB2LabLUT_s16, L, a, b);
 
                 //TODO: check: 255 or 256?
                 dst[i] = saturate_cast<uchar>(L/(LAB_BASE/255));
                 dst[i+1] = saturate_cast<uchar>(a/(LAB_BASE/255));
                 dst[i+2] = saturate_cast<uchar>(b/(LAB_BASE/255));
             }
+
         }
 
         for(; i < n; i += 3, src += scn )
@@ -3731,38 +3443,187 @@ struct Lab2RGB_b
         i = 0;
         if(useTetraInterpolation)
         {
+            for(; i < n*3*8*2; i += 3*8*2, dst += dcn*8*2)
+            {
+                v_uint8x16 u8l, u8a, u8b;
+                v_uint16x8 lvec0, lvec1, avec0, avec1, bvec0, bvec1;
+                v_load_deinterleave(src, u8l, u8a, u8b);
+                v_expand(u8l, lvec0, lvec1);
+                v_expand(u8a, avec0, avec1);
+                v_expand(u8b, bvec0, bvec1);
+
+                v_uint16x8 scaleReg = v_setall_u16(LAB_BASE/255);
+                lvec0 *= scaleReg; lvec1 *= scaleReg;
+                scaleReg = v_setall_u16(LAB_BASE/256);
+                avec0 *= scaleReg; avec1 *= scaleReg;
+                bvec0 *= scaleReg; bvec1 *= scaleReg;
+
+                //use XYZ table when doing Lab2RGB conversion
+                v_uint16x8 x_vec0, x_vec1, y_vec0, y_vec1, z_vec0, z_vec1;
+                trilinearPackedInterpolate(lvec0, avec0, bvec0, Lab2XYZLUT_s16, x_vec0, y_vec0, z_vec0);
+                trilinearPackedInterpolate(lvec1, avec1, bvec1, Lab2XYZLUT_s16, x_vec1, y_vec1, z_vec1);
+
+                v_uint16x8 r_vec0, r_vec1, g_vec0, g_vec1, b_vec0, b_vec1;
+
+                v_uint32x4 x32_00, x32_01, x32_10, x32_11;
+                v_uint32x4 y32_00, y32_01, y32_10, y32_11;
+                v_uint32x4 z32_00, z32_01, z32_10, z32_11;
+                v_expand(x_vec0, x32_00, x32_01); v_expand(x_vec1, x32_10, x32_11);
+                v_expand(y_vec0, y32_00, y32_01); v_expand(y_vec1, y32_10, y32_11);
+                v_expand(z_vec0, z32_00, z32_01); v_expand(z_vec1, z32_10, z32_11);
+
+                //Lab(full range) => XYZ: x: [-0.0328753, 1.98139] y: [0, 1] z: [-0.0821883, 4.41094]
+                //int x = (ro*20-LAB_BASE)/8, y = go, z = (bo*36-LAB_BASE)/8;
+                v_uint32x4 baseReg = v_setall_u32(LAB_BASE), mulReg = v_setall_u32(20);
+                x32_00 = (x32_00*mulReg - baseReg) >> 3; x32_01 = (x32_01*mulReg - baseReg) >> 3;
+                x32_10 = (x32_10*mulReg - baseReg) >> 3; x32_11 = (x32_11*mulReg - baseReg) >> 3;
+                mulReg = v_setall_u32(36);
+                z32_00 = (z32_00*mulReg - baseReg) >> 3; z32_01 = (z32_01*mulReg - baseReg) >> 3;
+                z32_10 = (z32_10*mulReg - baseReg) >> 3; z32_11 = (z32_11*mulReg - baseReg) >> 3;
+
+                const int shift = lab_shift+(lab_base_shift-inv_gamma_shift);
+                /*
+                    ro = CV_DESCALE(C0 * x + C1 * y + C2 * z, shift);
+                    go = CV_DESCALE(C3 * x + C4 * y + C5 * z, shift);
+                    bo = CV_DESCALE(C6 * x + C7 * y + C8 * z, shift);
+                */
+                v_uint32x4 r32_00, r32_01, r32_10, r32_11;
+                v_uint32x4 g32_00, g32_01, g32_10, g32_11;
+                v_uint32x4 b32_00, b32_01, b32_10, b32_11;
+                v_uint32x4 descaleReg = v_setall_u32(1 << ((shift)-1));
+                //( + descaleReg) >> shift;
+                //TODO: this
+                v_uint32x4 c0reg = v_setall_u32(C0), c1reg = v_setall_u32(C1), c2reg = v_setall_u32(C2),
+                           c3reg = v_setall_u32(C3), c4reg = v_setall_u32(C4), c5reg = v_setall_u32(C5),
+                           c6reg = v_setall_u32(C6), c7reg = v_setall_u32(C7), c8reg = v_setall_u32(C8);
+
+                r32_00 = (x32_00*c0reg + y32_00*c1reg + z32_00*c2reg + descaleReg) >> shift;
+                r32_01 = (x32_01*c0reg + y32_01*c1reg + z32_01*c2reg + descaleReg) >> shift;
+                r32_10 = (x32_10*c0reg + y32_10*c1reg + z32_10*c2reg + descaleReg) >> shift;
+                r32_11 = (x32_11*c0reg + y32_11*c1reg + z32_11*c2reg + descaleReg) >> shift;
+
+                g32_00 = (x32_00*c3reg + y32_00*c4reg + z32_00*c5reg + descaleReg) >> shift;
+                g32_01 = (x32_01*c3reg + y32_01*c4reg + z32_01*c5reg + descaleReg) >> shift;
+                g32_10 = (x32_10*c3reg + y32_10*c4reg + z32_10*c5reg + descaleReg) >> shift;
+                g32_11 = (x32_11*c3reg + y32_11*c4reg + z32_11*c5reg + descaleReg) >> shift;
+
+                b32_00 = (x32_00*c6reg + y32_00*c7reg + z32_00*c8reg + descaleReg) >> shift;
+                b32_01 = (x32_01*c6reg + y32_01*c7reg + z32_01*c8reg + descaleReg) >> shift;
+                b32_10 = (x32_10*c6reg + y32_10*c7reg + z32_10*c8reg + descaleReg) >> shift;
+                b32_11 = (x32_11*c6reg + y32_11*c7reg + z32_11*c8reg + descaleReg) >> shift;
+
+                r_vec0 = v_pack(r32_00, r32_01); r_vec1 = v_pack(r32_10, r32_11);
+                g_vec0 = v_pack(g32_00, g32_01); g_vec1 = v_pack(g32_10, g32_11);
+                b_vec0 = v_pack(b32_00, b32_01); b_vec1 = v_pack(b32_10, b32_11);
+
+                //limit indices in table
+                v_uint16x8 tabsz = v_setall_u16((int)INV_GAMMA_TAB_SIZE-1);
+                r_vec0 = v_max(v_setzero_u16(), v_min(r_vec0, tabsz));
+                r_vec1 = v_max(v_setzero_u16(), v_min(r_vec1, tabsz));
+                g_vec0 = v_max(v_setzero_u16(), v_min(g_vec0, tabsz));
+                g_vec1 = v_max(v_setzero_u16(), v_min(g_vec1, tabsz));
+                b_vec0 = v_max(v_setzero_u16(), v_min(b_vec0, tabsz));
+                b_vec1 = v_max(v_setzero_u16(), v_min(b_vec1, tabsz));
+
+                //ro = tab[ro];
+                r_vec0 = v_uint16x8(tab[r_vec0.get0()],
+                        tab[v_extract<1>(r_vec0, v_setzero_u16()).get0()],
+                        tab[v_extract<2>(r_vec0, v_setzero_u16()).get0()],
+                        tab[v_extract<3>(r_vec0, v_setzero_u16()).get0()],
+                        tab[v_extract<4>(r_vec0, v_setzero_u16()).get0()],
+                        tab[v_extract<5>(r_vec0, v_setzero_u16()).get0()],
+                        tab[v_extract<6>(r_vec0, v_setzero_u16()).get0()],
+                        tab[v_extract<7>(r_vec0, v_setzero_u16()).get0()]);
+                r_vec1 = v_uint16x8(tab[r_vec1.get0()],
+                        tab[v_extract<1>(r_vec1, v_setzero_u16()).get0()],
+                        tab[v_extract<2>(r_vec1, v_setzero_u16()).get0()],
+                        tab[v_extract<3>(r_vec1, v_setzero_u16()).get0()],
+                        tab[v_extract<4>(r_vec1, v_setzero_u16()).get0()],
+                        tab[v_extract<5>(r_vec1, v_setzero_u16()).get0()],
+                        tab[v_extract<6>(r_vec1, v_setzero_u16()).get0()],
+                        tab[v_extract<7>(r_vec1, v_setzero_u16()).get0()]);
+
+                //go = tab[go];
+                g_vec0 = v_uint16x8(tab[g_vec0.get0()],
+                        tab[v_extract<1>(g_vec0, v_setzero_u16()).get0()],
+                        tab[v_extract<2>(g_vec0, v_setzero_u16()).get0()],
+                        tab[v_extract<3>(g_vec0, v_setzero_u16()).get0()],
+                        tab[v_extract<4>(g_vec0, v_setzero_u16()).get0()],
+                        tab[v_extract<5>(g_vec0, v_setzero_u16()).get0()],
+                        tab[v_extract<6>(g_vec0, v_setzero_u16()).get0()],
+                        tab[v_extract<7>(g_vec0, v_setzero_u16()).get0()]);
+                g_vec1 = v_uint16x8(tab[g_vec1.get0()],
+                        tab[v_extract<1>(g_vec1, v_setzero_u16()).get0()],
+                        tab[v_extract<2>(g_vec1, v_setzero_u16()).get0()],
+                        tab[v_extract<3>(g_vec1, v_setzero_u16()).get0()],
+                        tab[v_extract<4>(g_vec1, v_setzero_u16()).get0()],
+                        tab[v_extract<5>(g_vec1, v_setzero_u16()).get0()],
+                        tab[v_extract<6>(g_vec1, v_setzero_u16()).get0()],
+                        tab[v_extract<7>(g_vec1, v_setzero_u16()).get0()]);
+
+                //bo = tab[bo];
+                b_vec0 = v_uint16x8(tab[b_vec0.get0()],
+                        tab[v_extract<1>(b_vec0, v_setzero_u16()).get0()],
+                        tab[v_extract<2>(b_vec0, v_setzero_u16()).get0()],
+                        tab[v_extract<3>(b_vec0, v_setzero_u16()).get0()],
+                        tab[v_extract<4>(b_vec0, v_setzero_u16()).get0()],
+                        tab[v_extract<5>(b_vec0, v_setzero_u16()).get0()],
+                        tab[v_extract<6>(b_vec0, v_setzero_u16()).get0()],
+                        tab[v_extract<7>(b_vec0, v_setzero_u16()).get0()]);
+                b_vec1 = v_uint16x8(tab[b_vec1.get0()],
+                        tab[v_extract<1>(b_vec1, v_setzero_u16()).get0()],
+                        tab[v_extract<2>(b_vec1, v_setzero_u16()).get0()],
+                        tab[v_extract<3>(b_vec1, v_setzero_u16()).get0()],
+                        tab[v_extract<4>(b_vec1, v_setzero_u16()).get0()],
+                        tab[v_extract<5>(b_vec1, v_setzero_u16()).get0()],
+                        tab[v_extract<6>(b_vec1, v_setzero_u16()).get0()],
+                        tab[v_extract<7>(b_vec1, v_setzero_u16()).get0()]);
+
+                v_uint16x8 dummy;
+                if(bIdx > 0)
+                {
+                    dummy = r_vec0; r_vec0 = b_vec0; b_vec0 = r_vec0;
+                    dummy = r_vec1; r_vec1 = b_vec1; b_vec1 = r_vec1;
+                }
+
+                v_uint8x16 u8_b = v_pack(b_vec0, b_vec1);
+                v_uint8x16 u8_g = v_pack(g_vec0, g_vec1);
+                v_uint8x16 u8_r = v_pack(r_vec0, r_vec1);
+                if(dcn == 4)
+                {
+                    v_uint8x16 u8_alpha = v_setall_u8(alpha);
+                    v_store_interleave(dst, u8_b, u8_g, u8_r, u8_alpha);
+                }
+                else
+                {
+                    v_store_interleave(dst, u8_b, u8_g, u8_r);
+                }
+            }
+
             for (; i < n*3; i += 3, dst += dcn)
             {
                 int L = src[i + 0]*LAB_BASE/255;
                 int a = src[i + 1]*LAB_BASE/256;
                 int b = src[i + 2]*LAB_BASE/256;
 
+                //use XYZ table when doing Lab2RGB conversion
                 int ro, go, bo;
-                chooseInterpolate(L, a, b, LAB_TO_RGB, ro, go, bo);
-                if(useXYZTable)
-                {
-                    //Lab(full range) => XYZ: x: [-0.0328753, 1.98139] y: [0, 1] z: [-0.0821883, 4.41094]
-                    int x = (ro*20-LAB_BASE)/8, y = go, z = (bo*36-LAB_BASE)/8;
+                trilinearInterpolate(L, a, b, Lab2XYZLUT_s16, ro, go, bo);
+                //Lab(full range) => XYZ: x: [-0.0328753, 1.98139] y: [0, 1] z: [-0.0821883, 4.41094]
+                int x = (ro*20-LAB_BASE)/8, y = go, z = (bo*36-LAB_BASE)/8;
 
-                    const int shift = lab_shift+(lab_base_shift-inv_gamma_shift);
-                    ro = CV_DESCALE(C0 * x + C1 * y + C2 * z, shift);
-                    go = CV_DESCALE(C3 * x + C4 * y + C5 * z, shift);
-                    bo = CV_DESCALE(C6 * x + C7 * y + C8 * z, shift);
+                const int shift = lab_shift+(lab_base_shift-inv_gamma_shift);
+                ro = CV_DESCALE(C0 * x + C1 * y + C2 * z, shift);
+                go = CV_DESCALE(C3 * x + C4 * y + C5 * z, shift);
+                bo = CV_DESCALE(C6 * x + C7 * y + C8 * z, shift);
 
-                    ro = max(0, min((int)INV_GAMMA_TAB_SIZE-1, ro));
-                    go = max(0, min((int)INV_GAMMA_TAB_SIZE-1, go));
-                    bo = max(0, min((int)INV_GAMMA_TAB_SIZE-1, bo));
+                ro = max(0, min((int)INV_GAMMA_TAB_SIZE-1, ro));
+                go = max(0, min((int)INV_GAMMA_TAB_SIZE-1, go));
+                bo = max(0, min((int)INV_GAMMA_TAB_SIZE-1, bo));
 
-                    ro = tab[ro];
-                    go = tab[go];
-                    bo = tab[bo];
-                }
-                else
-                {
-                    ro = ro/(LAB_BASE/255);
-                    go = go/(LAB_BASE/255);
-                    bo = bo/(LAB_BASE/255);
-                }
+                ro = tab[ro];
+                go = tab[go];
+                bo = tab[bo];
 
                 dst[bIdx^2] = saturate_cast<uchar>(bo);
                 dst[1] = saturate_cast<uchar>(go);
@@ -3945,9 +3806,6 @@ TEST(ImgProc_Color, LabCheckWorking)
     //settings
     #define INT_DATA 1
     #define TO_BGR 0
-    SET_INTER(LAB_INTER_TRILINEAR);
-    useXYZTable = false;
-    useFloatVersion = false;
 
     enableTetraInterpolation = true;
     Lab2RGB_f interToBgr(3, 0, 0, 0, true);
@@ -4269,8 +4127,6 @@ TEST(ImgProc_Color, LabCheckWorking)
     //max-max channel errors
     std::cout << std::endl << (TO_BGR ? "Lab2RGB" : "RGB2Lab") << " ";
     std::cout << "lab_lut_shift " << (int)lab_lut_shift << " ";
-    std::cout << strIterType << " " << (useXYZTable ? "+XYZ" : "-XYZ") << " ";
-    std::cout << (useFloatVersion ? "float" : "int") << ": ";
     for(int i = 0; i < 4; i++)
     {
         std::cout << maxMaxError[i] << "\t";
