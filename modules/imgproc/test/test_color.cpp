@@ -2392,7 +2392,7 @@ enum
     LAB_LUT_DIM = (1 << lab_lut_shift)+1,
     lab_base_shift = 14,
     LAB_BASE = (1 << lab_base_shift),
-    trilinear_shift = 8 - lab_lut_shift,
+    trilinear_shift = 8 - lab_lut_shift + 1,
     TRILINEAR_BASE = (1 << trilinear_shift)
 };
 static int16_t Lab2RGBLUT_s16[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3*8];
@@ -2683,9 +2683,9 @@ static inline void trilinearInterpolate(int cx, int cy, int cz, int16_t* LUT,
 
     //x, y, z are [0; TRILINEAR_BASE)
     static const int bitMask = (1 << trilinear_shift) - 1;
-    int x = (cx >> (lab_base_shift - 8)) & bitMask;
-    int y = (cy >> (lab_base_shift - 8)) & bitMask;
-    int z = (cz >> (lab_base_shift - 8)) & bitMask;
+    int x = (cx >> (lab_base_shift - 8 - 1)) & bitMask;
+    int y = (cy >> (lab_base_shift - 8 - 1)) & bitMask;
+    int z = (cz >> (lab_base_shift - 8 - 1)) & bitMask;
 
     int w[8];
     for(int i = 0; i < 8; i++)
@@ -2716,9 +2716,9 @@ static inline void trilinearPackedInterpolate(const v_uint16x8 inX, const v_uint
     //x, y, z are [0; TRILINEAR_BASE)
     const uint16_t bitMask = (1 << trilinear_shift) - 1;
     v_uint16x8 bitMaskReg = v_setall_u16(bitMask);
-    v_uint16x8 fracX = (inX >> (lab_base_shift - 8)) & bitMaskReg;
-    v_uint16x8 fracY = (inY >> (lab_base_shift - 8)) & bitMaskReg;
-    v_uint16x8 fracZ = (inZ >> (lab_base_shift - 8)) & bitMaskReg;
+    v_uint16x8 fracX = (inX >> (lab_base_shift - 8 - 1)) & bitMaskReg;
+    v_uint16x8 fracY = (inY >> (lab_base_shift - 8 - 1)) & bitMaskReg;
+    v_uint16x8 fracZ = (inZ >> (lab_base_shift - 8 - 1)) & bitMaskReg;
 
     //load values to interpolate for pix0, pix1, .., pix7
     int16_t* addr0, *addr1, *addr2, *addr3, *addr4, *addr5, *addr6, *addr7;
