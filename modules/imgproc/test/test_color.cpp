@@ -2385,7 +2385,7 @@ static ushort sRGBInvGammaTab_b[INV_GAMMA_TAB_SIZE], linearInvGammaTab_b[INV_GAM
 static ushort LabCbrtTab_b[LAB_CBRT_TAB_SIZE_B];
 
 static bool enableTetraInterpolation = true;
-static bool enablePacked = false;
+static bool enablePacked = true;
 enum
 {
     lab_lut_shift = 5,
@@ -2400,6 +2400,9 @@ static int16_t RGB2LabLUT_s16[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3*8];
 static int16_t Lab2XYZLUT_s16[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3*8];
 static int16_t XYZ2LabLUT_s16[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3*8];
 static int16_t trilinearLUT[TRILINEAR_BASE*TRILINEAR_BASE*TRILINEAR_BASE*8];
+
+//v*16384/255 ~~ v*16384/256 + v/4
+#define DIV255(reg) (reg) = ((reg) << (lab_base_shift - 8)) + ((reg) >> 2)
 
 #define clip(value) \
     value < 0.0f ? 0.0f : value > 1.0f ? 1.0f : value;
@@ -3309,18 +3312,26 @@ struct RGB2Lab_b
                     dummy = rvec1; rvec1 = bvec1; bvec1 = dummy;
                 }
 
-                // (r, g, b) *= (LAB_BASE/256);
-                rvec0 = rvec0 << (lab_base_shift - 8); rvec1 = rvec1 << (lab_base_shift - 8);
-                gvec0 = gvec0 << (lab_base_shift - 8); gvec1 = gvec1 << (lab_base_shift - 8);
-                bvec0 = bvec0 << (lab_base_shift - 8); bvec1 = bvec1 << (lab_base_shift - 8);
+                // (r, g, b) *= (LAB_BASE/255);
+                DIV255(rvec0); DIV255(rvec1);
+                DIV255(gvec0); DIV255(gvec1);
+                DIV255(bvec0); DIV255(bvec1);
 
                 //don't use XYZ table for RGB2Lab
                 v_uint16x8 l_vec0, l_vec1, a_vec0, a_vec1, b_vec0, b_vec1;
                 trilinearPackedInterpolate(rvec0, gvec0, bvec0, RGB2LabLUT_s16, l_vec0, a_vec0, b_vec0);
                 trilinearPackedInterpolate(rvec1, gvec1, bvec1, RGB2LabLUT_s16, l_vec1, a_vec1, b_vec1);
 
-                // (l, a, b) /= (LAB_BASE/256);
-                l_vec0 = l_vec0 >> (lab_base_shift - 8); l_vec1 = l_vec1 >> (lab_base_shift - 8);
+                // l = l*255/LAB_BASE
+                v_uint16x8 scaleReg = v_setall_u16(255); v_uint32x4 dw0, dw1;
+                v_mul_expand(l_vec0, scaleReg, dw0, dw1);
+                dw0 = dw0 >> lab_base_shift; dw1 = dw1 >> lab_base_shift;
+                l_vec0 = v_pack(dw0, dw1);
+                v_mul_expand(l_vec1, scaleReg, dw0, dw1);
+                dw0 = dw0 >> lab_base_shift; dw1 = dw1 >> lab_base_shift;
+                l_vec1 = v_pack(dw0, dw1);
+
+                // (a, b) /= (LAB_BASE/256);
                 a_vec0 = a_vec0 >> (lab_base_shift - 8); a_vec1 = a_vec1 >> (lab_base_shift - 8);
                 b_vec0 = b_vec0 >> (lab_base_shift - 8); b_vec1 = b_vec1 >> (lab_base_shift - 8);
 
@@ -3341,8 +3352,7 @@ struct RGB2Lab_b
                 int L, a, b;
                 trilinearInterpolate(R, G, B, RGB2LabLUT_s16, L, a, b);
 
-                //here 256 is OK
-                dst[i] = saturate_cast<uchar>(L/(LAB_BASE/256));
+                dst[i] = saturate_cast<uchar>(L*255/LAB_BASE);
                 dst[i+1] = saturate_cast<uchar>(a/(LAB_BASE/256));
                 dst[i+2] = saturate_cast<uchar>(b/(LAB_BASE/256));
             }
@@ -3478,34 +3488,35 @@ struct Lab2RGB_b
                 v_expand(u8a, avec0, avec1);
                 v_expand(u8b, bvec0, bvec1);
 
-                v_uint16x8 scaleReg = v_setall_u16(LAB_BASE/255);
-                lvec0 *= scaleReg; lvec1 *= scaleReg;
-                scaleReg = v_setall_u16(LAB_BASE/256);
-                avec0 *= scaleReg; avec1 *= scaleReg;
-                bvec0 *= scaleReg; bvec1 *= scaleReg;
+                //l = l*LAB_BASE/255
+                DIV255(lvec0); DIV255(lvec1);
+                //(a, b) * = LAB_BASE/256
+                avec0 = avec0 << (lab_base_shift - 8); avec1 = avec1 << (lab_base_shift - 8);
+                bvec0 = bvec0 << (lab_base_shift - 8); bvec1 = bvec1 << (lab_base_shift - 8);
 
                 //use XYZ table when doing Lab2RGB conversion
                 v_uint16x8 x_vec0, x_vec1, y_vec0, y_vec1, z_vec0, z_vec1;
                 trilinearPackedInterpolate(lvec0, avec0, bvec0, Lab2XYZLUT_s16, x_vec0, y_vec0, z_vec0);
                 trilinearPackedInterpolate(lvec1, avec1, bvec1, Lab2XYZLUT_s16, x_vec1, y_vec1, z_vec1);
 
-                v_uint16x8 r_vec0, r_vec1, g_vec0, g_vec1, b_vec0, b_vec1;
-
-                v_uint32x4 x32_00, x32_01, x32_10, x32_11;
-                v_uint32x4 y32_00, y32_01, y32_10, y32_11;
-                v_uint32x4 z32_00, z32_01, z32_10, z32_11;
-                v_expand(x_vec0, x32_00, x32_01); v_expand(x_vec1, x32_10, x32_11);
-                v_expand(y_vec0, y32_00, y32_01); v_expand(y_vec1, y32_10, y32_11);
-                v_expand(z_vec0, z32_00, z32_01); v_expand(z_vec1, z32_10, z32_11);
+                v_int16x8 x_vec0s(x_vec0.val), x_vec1s(x_vec1.val);
+                v_int16x8 y_vec0s(y_vec0.val), y_vec1s(y_vec1.val);
+                v_int16x8 z_vec0s(z_vec0.val), z_vec1s(z_vec1.val);
+                v_int32x4 xdw_00, xdw_01, xdw_10, xdw_11;
+                v_int32x4 ydw_00, ydw_01, ydw_10, ydw_11;
+                v_int32x4 zdw_00, zdw_01, zdw_10, zdw_11;
+                v_expand(x_vec0s, xdw_00, xdw_01); v_expand(x_vec1s, xdw_10, xdw_11);
+                v_expand(y_vec0s, ydw_00, ydw_01); v_expand(y_vec1s, ydw_10, ydw_11);
+                v_expand(z_vec0s, zdw_00, zdw_01); v_expand(z_vec1s, zdw_10, zdw_11);
 
                 //Lab(full range) => XYZ: x: [-0.0328753, 1.98139] y: [0, 1] z: [-0.0821883, 4.41094]
                 //int x = (ro*20-LAB_BASE)/8, y = go, z = (bo*36-LAB_BASE)/8;
-                v_uint32x4 baseReg = v_setall_u32(LAB_BASE), mulReg = v_setall_u32(20);
-                x32_00 = (x32_00*mulReg - baseReg) >> 3; x32_01 = (x32_01*mulReg - baseReg) >> 3;
-                x32_10 = (x32_10*mulReg - baseReg) >> 3; x32_11 = (x32_11*mulReg - baseReg) >> 3;
-                mulReg = v_setall_u32(36);
-                z32_00 = (z32_00*mulReg - baseReg) >> 3; z32_01 = (z32_01*mulReg - baseReg) >> 3;
-                z32_10 = (z32_10*mulReg - baseReg) >> 3; z32_11 = (z32_11*mulReg - baseReg) >> 3;
+                v_int32x4 baseReg = v_setall_s32(LAB_BASE), mulReg = v_setall_s32(20);
+                xdw_00 = (xdw_00*mulReg - baseReg) >> 3; xdw_01 = (xdw_01*mulReg - baseReg) >> 3;
+                xdw_10 = (xdw_10*mulReg - baseReg) >> 3; xdw_11 = (xdw_11*mulReg - baseReg) >> 3;
+                mulReg = v_setall_s32(36);
+                zdw_00 = (zdw_00*mulReg - baseReg) >> 3; zdw_01 = (zdw_01*mulReg - baseReg) >> 3;
+                zdw_10 = (zdw_10*mulReg - baseReg) >> 3; zdw_11 = (zdw_11*mulReg - baseReg) >> 3;
 
                 const int shift = lab_shift+(lab_base_shift-inv_gamma_shift);
                 /*
@@ -3513,41 +3524,47 @@ struct Lab2RGB_b
                     go = CV_DESCALE(C3 * x + C4 * y + C5 * z, shift);
                     bo = CV_DESCALE(C6 * x + C7 * y + C8 * z, shift);
                 */
-                v_uint32x4 r32_00, r32_01, r32_10, r32_11;
-                v_uint32x4 g32_00, g32_01, g32_10, g32_11;
-                v_uint32x4 b32_00, b32_01, b32_10, b32_11;
-                v_uint32x4 descaleReg = v_setall_u32(1 << ((shift)-1));
-                v_uint32x4 c0reg = v_setall_u32(C0), c1reg = v_setall_u32(C1), c2reg = v_setall_u32(C2),
-                           c3reg = v_setall_u32(C3), c4reg = v_setall_u32(C4), c5reg = v_setall_u32(C5),
-                           c6reg = v_setall_u32(C6), c7reg = v_setall_u32(C7), c8reg = v_setall_u32(C8);
+                v_int32x4 rdw_00, rdw_01, rdw_10, rdw_11;
+                v_int32x4 gdw_00, gdw_01, gdw_10, gdw_11;
+                v_int32x4 bdw_00, bdw_01, bdw_10, bdw_11;
+                v_int32x4 descaleReg = v_setall_s32(1 << ((shift)-1));
+                v_int32x4 c0reg = v_setall_s32(C0), c1reg = v_setall_s32(C1), c2reg = v_setall_s32(C2),
+                          c3reg = v_setall_s32(C3), c4reg = v_setall_s32(C4), c5reg = v_setall_s32(C5),
+                          c6reg = v_setall_s32(C6), c7reg = v_setall_s32(C7), c8reg = v_setall_s32(C8);
 
-                r32_00 = (x32_00*c0reg + y32_00*c1reg + z32_00*c2reg + descaleReg) >> shift;
-                r32_01 = (x32_01*c0reg + y32_01*c1reg + z32_01*c2reg + descaleReg) >> shift;
-                r32_10 = (x32_10*c0reg + y32_10*c1reg + z32_10*c2reg + descaleReg) >> shift;
-                r32_11 = (x32_11*c0reg + y32_11*c1reg + z32_11*c2reg + descaleReg) >> shift;
+                rdw_00 = (xdw_00*c0reg + ydw_00*c1reg + zdw_00*c2reg + descaleReg) >> shift;
+                rdw_01 = (xdw_01*c0reg + ydw_01*c1reg + zdw_01*c2reg + descaleReg) >> shift;
+                rdw_10 = (xdw_10*c0reg + ydw_10*c1reg + zdw_10*c2reg + descaleReg) >> shift;
+                rdw_11 = (xdw_11*c0reg + ydw_11*c1reg + zdw_11*c2reg + descaleReg) >> shift;
 
-                g32_00 = (x32_00*c3reg + y32_00*c4reg + z32_00*c5reg + descaleReg) >> shift;
-                g32_01 = (x32_01*c3reg + y32_01*c4reg + z32_01*c5reg + descaleReg) >> shift;
-                g32_10 = (x32_10*c3reg + y32_10*c4reg + z32_10*c5reg + descaleReg) >> shift;
-                g32_11 = (x32_11*c3reg + y32_11*c4reg + z32_11*c5reg + descaleReg) >> shift;
+                gdw_00 = (xdw_00*c3reg + ydw_00*c4reg + zdw_00*c5reg + descaleReg) >> shift;
+                gdw_01 = (xdw_01*c3reg + ydw_01*c4reg + zdw_01*c5reg + descaleReg) >> shift;
+                gdw_10 = (xdw_10*c3reg + ydw_10*c4reg + zdw_10*c5reg + descaleReg) >> shift;
+                gdw_11 = (xdw_11*c3reg + ydw_11*c4reg + zdw_11*c5reg + descaleReg) >> shift;
 
-                b32_00 = (x32_00*c6reg + y32_00*c7reg + z32_00*c8reg + descaleReg) >> shift;
-                b32_01 = (x32_01*c6reg + y32_01*c7reg + z32_01*c8reg + descaleReg) >> shift;
-                b32_10 = (x32_10*c6reg + y32_10*c7reg + z32_10*c8reg + descaleReg) >> shift;
-                b32_11 = (x32_11*c6reg + y32_11*c7reg + z32_11*c8reg + descaleReg) >> shift;
+                bdw_00 = (xdw_00*c6reg + ydw_00*c7reg + zdw_00*c8reg + descaleReg) >> shift;
+                bdw_01 = (xdw_01*c6reg + ydw_01*c7reg + zdw_01*c8reg + descaleReg) >> shift;
+                bdw_10 = (xdw_10*c6reg + ydw_10*c7reg + zdw_10*c8reg + descaleReg) >> shift;
+                bdw_11 = (xdw_11*c6reg + ydw_11*c7reg + zdw_11*c8reg + descaleReg) >> shift;
 
-                r_vec0 = v_pack(r32_00, r32_01); r_vec1 = v_pack(r32_10, r32_11);
-                g_vec0 = v_pack(g32_00, g32_01); g_vec1 = v_pack(g32_10, g32_11);
-                b_vec0 = v_pack(b32_00, b32_01); b_vec1 = v_pack(b32_10, b32_11);
+                v_int16x8 r_vec0s, r_vec1s, g_vec0s, g_vec1s, b_vec0s, b_vec1s;
+
+                r_vec0s = v_pack(rdw_00, rdw_01); r_vec1s = v_pack(rdw_10, rdw_11);
+                g_vec0s = v_pack(gdw_00, gdw_01); g_vec1s = v_pack(gdw_10, gdw_11);
+                b_vec0s = v_pack(bdw_00, bdw_01); b_vec1s = v_pack(bdw_10, bdw_11);
 
                 //limit indices in table
-                v_uint16x8 tabsz = v_setall_u16((int)INV_GAMMA_TAB_SIZE-1);
-                r_vec0 = v_max(v_setzero_u16(), v_min(r_vec0, tabsz));
-                r_vec1 = v_max(v_setzero_u16(), v_min(r_vec1, tabsz));
-                g_vec0 = v_max(v_setzero_u16(), v_min(g_vec0, tabsz));
-                g_vec1 = v_max(v_setzero_u16(), v_min(g_vec1, tabsz));
-                b_vec0 = v_max(v_setzero_u16(), v_min(b_vec0, tabsz));
-                b_vec1 = v_max(v_setzero_u16(), v_min(b_vec1, tabsz));
+                v_int16x8 tabsz = v_setall_s16((int)INV_GAMMA_TAB_SIZE-1);
+                r_vec0s = v_max(v_setzero_s16(), v_min(r_vec0s, tabsz));
+                r_vec1s = v_max(v_setzero_s16(), v_min(r_vec1s, tabsz));
+                g_vec0s = v_max(v_setzero_s16(), v_min(g_vec0s, tabsz));
+                g_vec1s = v_max(v_setzero_s16(), v_min(g_vec1s, tabsz));
+                b_vec0s = v_max(v_setzero_s16(), v_min(b_vec0s, tabsz));
+                b_vec1s = v_max(v_setzero_s16(), v_min(b_vec1s, tabsz));
+
+                v_uint16x8 r_vec0(r_vec0s.val), r_vec1(r_vec1s.val);
+                v_uint16x8 g_vec0(g_vec0s.val), g_vec1(g_vec1s.val);
+                v_uint16x8 b_vec0(b_vec0s.val), b_vec1(b_vec1s.val);
 
                 //ro = tab[ro]; go = tab[go]; bo = tab[bo];
 #define GAMMA_TAB_SUBST(reg) \
@@ -3571,7 +3588,7 @@ struct Lab2RGB_b
                 v_uint8x16 u8_r = v_pack(r_vec0, r_vec1);
 
                 v_uint8x16 dummy;
-                if(bIdx > 0)
+                if(bIdx == 0)
                 {
                     dummy = u8_r; u8_r = u8_b; u8_b = dummy;
                 }
@@ -3779,6 +3796,7 @@ struct Lab2RGB_b
 };
 
 #undef clip
+#undef DIV255
 
 /////////////
 
