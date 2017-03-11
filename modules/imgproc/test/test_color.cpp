@@ -2385,6 +2385,7 @@ static ushort sRGBInvGammaTab_b[INV_GAMMA_TAB_SIZE], linearInvGammaTab_b[INV_GAM
 static ushort LabCbrtTab_b[LAB_CBRT_TAB_SIZE_B];
 
 static bool enableTetraInterpolation = true;
+static bool enablePacked = false;
 enum
 {
     lab_lut_shift = 5,
@@ -2415,26 +2416,10 @@ static inline float applyInvGamma(float x)
 
 static inline void writeToLUT(int p, int q, int r, int16_t* LUT, uint16_t a, uint16_t b, uint16_t c)
 {
-#define WRITE_VALS(_p, _q, _r) \
-    do\
-    {\
-        LUT[(p - (_p) + LAB_LUT_DIM*(q - (_q) + LAB_LUT_DIM*(r - (_q))))*3*8 + 4*(_p) + 2*(_q) + 1*(_r) +  0] = a;\
-        LUT[(p - (_p) + LAB_LUT_DIM*(q - (_q) + LAB_LUT_DIM*(r - (_q))))*3*8 + 4*(_p) + 2*(_q) + 1*(_r) +  8] = b;\
-        LUT[(p - (_p) + LAB_LUT_DIM*(q - (_q) + LAB_LUT_DIM*(r - (_q))))*3*8 + 4*(_p) + 2*(_q) + 1*(_r) + 16] = c;\
-    }\
-    while(0)
-
-    WRITE_VALS(0, 0, 0);
-    WRITE_VALS(0, 0, 1);
-    WRITE_VALS(0, 1, 0);
-    WRITE_VALS(0, 1, 1);
-    WRITE_VALS(1, 0, 0);
-    WRITE_VALS(1, 0, 1);
-    WRITE_VALS(1, 1, 0);
-    WRITE_VALS(1, 1, 1);
-
-#undef WRITE_VALS
+    int idx = p*3 + q*LAB_LUT_DIM*3 + r*LAB_LUT_DIM*LAB_LUT_DIM*3;
+    LUT[idx] = a; LUT[idx+1] = b; LUT[idx+2] = c;
 }
+
 
 static void initLabTabs()
 {
@@ -2515,6 +2500,11 @@ static void initLabTabs()
                   D3 = coeffs[3], D4 = coeffs[4], D5 = coeffs[5],
                   D6 = coeffs[6], D7 = coeffs[7], D8 = coeffs[8];
 
+            AutoBuffer<int16_t> Lab2RGBprev(LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3);
+            AutoBuffer<int16_t> RGB2Labprev(LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3);
+            AutoBuffer<int16_t> Lab2XYZprev(LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3);
+            AutoBuffer<int16_t> XYZ2Labprev(LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3);
+
             for(int p = 0; p < LAB_LUT_DIM; p++)
             {
                 for(int q = 0; q < LAB_LUT_DIM; q++)
@@ -2549,7 +2539,7 @@ static void initLabTabs()
                         float x = fxz[0], z = fxz[1];
 
                         //Lab(full range) => XYZ: x: [-0.0328753, 1.98139] y: [0, 1] z: [-0.0821883, 4.41094]
-                        writeToLUT(p, q, r, Lab2XYZLUT_s16,
+                        writeToLUT(p, q, r, Lab2XYZprev,
                                    cvRound(LAB_BASE*(x+0.125f)/2.5f),
                                    cvRound(LAB_BASE*y),
                                    cvRound(LAB_BASE*(z+0.125f)/4.5f));
@@ -2565,7 +2555,7 @@ static void initLabTabs()
                         go = applyInvGamma(go);
                         bo = applyInvGamma(bo);
 
-                        writeToLUT(p, q, r, Lab2RGBLUT_s16,
+                        writeToLUT(p, q, r, Lab2RGBprev,
                                    cvRound(LAB_BASE*ro),
                                    cvRound(LAB_BASE*go),
                                    cvRound(LAB_BASE*bo));
@@ -2591,7 +2581,7 @@ static void initLabTabs()
                         float a = 500.f * (FX - FY);
                         float b = 200.f * (FY - FZ);
 
-                        writeToLUT(p, q, r, RGB2LabLUT_s16,
+                        writeToLUT(p, q, r, RGB2Labprev,
                                    cvRound(LAB_BASE*L/100.0f),
                                    cvRound(LAB_BASE*(a+128.0f)/256.0f),
                                    cvRound(LAB_BASE*(b+128.0f)/256.0f));
@@ -2608,13 +2598,51 @@ static void initLabTabs()
                         float ia = 500.f * (iFX - iFY);
                         float ib = 200.f * (iFY - iFZ);
 
-                        writeToLUT(p, q, r, XYZ2LabLUT_s16,
+                        writeToLUT(p, q, r, XYZ2Labprev,
                                    cvRound(LAB_BASE*iL/100.0f),
                                    cvRound(LAB_BASE*(ia+128.0f)/256.0f),
                                    cvRound(LAB_BASE*(ib+128.0f)/256.0f));
                     }
                 }
             }
+            for(int p = 0; p < LAB_LUT_DIM; p++)
+            {
+                for(int q = 0; q < LAB_LUT_DIM; q++)
+                {
+                    for(int r = 0; r < LAB_LUT_DIM; r++)
+                    {
+                        #define FILL(_p, _q, _r) \
+                        do {\
+                            int idxold = (p+(_p))*3 + (q+(_q))*LAB_LUT_DIM*3 + (r+(_r))*LAB_LUT_DIM*LAB_LUT_DIM*3;\
+                            int idxnew = p*3*8 + q*LAB_LUT_DIM*3*8 + r*LAB_LUT_DIM*LAB_LUT_DIM*3*8+4*(_p)+2*(_q)+(_r);\
+                            Lab2RGBLUT_s16[idxnew]    = Lab2RGBprev[idxold];\
+                            Lab2RGBLUT_s16[idxnew+8]  = Lab2RGBprev[idxold+1];\
+                            Lab2RGBLUT_s16[idxnew+16] = Lab2RGBprev[idxold+2];\
+                            RGB2LabLUT_s16[idxnew]    = RGB2Labprev[idxold];\
+                            RGB2LabLUT_s16[idxnew+8]  = RGB2Labprev[idxold+1];\
+                            RGB2LabLUT_s16[idxnew+16] = RGB2Labprev[idxold+2];\
+                            Lab2XYZLUT_s16[idxnew]    = Lab2XYZprev[idxold];\
+                            Lab2XYZLUT_s16[idxnew+8]  = Lab2XYZprev[idxold+1];\
+                            Lab2XYZLUT_s16[idxnew+16] = Lab2XYZprev[idxold+2];\
+                            XYZ2LabLUT_s16[idxnew]    = XYZ2Labprev[idxold];\
+                            XYZ2LabLUT_s16[idxnew+8]  = XYZ2Labprev[idxold+1];\
+                            XYZ2LabLUT_s16[idxnew+16] = XYZ2Labprev[idxold+2];\
+                        } while(0)
+
+                        FILL(0, 0, 0);
+                        FILL(0, 0, 1);
+                        FILL(0, 1, 0);
+                        FILL(0, 1, 1);
+                        FILL(1, 0, 0);
+                        FILL(1, 0, 1);
+                        FILL(1, 1, 0);
+                        FILL(1, 1, 1);
+
+                        #undef FILL
+                    }
+                }
+            }
+
             for(int p = 0; p < TRILINEAR_BASE; p++)
             {
                 int16_t pp = TRILINEAR_BASE - p;
@@ -2698,68 +2726,74 @@ static inline void trilinearPackedInterpolate(const v_uint16x8 inX, const v_uint
     v_int16x8 b0, b1, b2, b3, b4, b5, b6, b7;
     v_int16x8 c0, c1, c2, c3, c4, c5, c6, c7;
 
-    v_uint16x8 lutAddrs = v_setall_u16(3*8)*idxsX +
-                          v_setall_u16(3*8*LAB_LUT_DIM)*idxsY +
-                          v_setall_u16(3*8*LAB_LUT_DIM*LAB_LUT_DIM)*idxsZ;
-    v_uint32x4 dw0, dw1;
-    v_expand(lutAddrs, dw0, dw1);
+    //"2*" for int16 size
+    v_uint32x4 addrDw0, addrDw1, addrDw10, addrDw11;
+    v_mul_expand(v_setall_u16(2*3*8), idxsX, addrDw0, addrDw1);
+    v_mul_expand(v_setall_u16(2*3*8*LAB_LUT_DIM), idxsY, addrDw10, addrDw11);
+    addrDw0 += addrDw10; addrDw1 += addrDw11;
+    v_mul_expand(v_setall_u16(2*3*8*LAB_LUT_DIM*LAB_LUT_DIM), idxsZ, addrDw10, addrDw11);
+    addrDw0 += addrDw10; addrDw1 += addrDw11;
 
 #if SIZE_MAX > UINT_MAX
     //64-bit code
-    v_uint64x2 qw0, qw1, qw2, qw3;
-    v_expand(dw0, qw0, qw1); v_expand(dw1, qw2, qw3);
-    qw0 += v_setall_u64((uint64)LUT);
-    qw1 += v_setall_u64((uint64)LUT);
-    qw2 += v_setall_u64((uint64)LUT);
-    qw3 += v_setall_u64((uint64)LUT);
+    v_uint64x2 addrQw0, addrQw1, addrQw2, addrQw3;
+    v_expand(addrDw0, addrQw0, addrQw1); v_expand(addrDw1, addrQw2, addrQw3);
+    addrQw0 += v_setall_u64((uint64)LUT);
+    addrQw1 += v_setall_u64((uint64)LUT);
+    addrQw2 += v_setall_u64((uint64)LUT);
+    addrQw3 += v_setall_u64((uint64)LUT);
 
-    addr0 = (int16_t*)(qw0.get0());
-    addr1 = (int16_t*)(v_extract<1>(qw0, v_setzero_u64()).get0());
-    addr2 = (int16_t*)(qw1.get0());
-    addr3 = (int16_t*)(v_extract<1>(qw1, v_setzero_u64()).get0());
-    addr4 = (int16_t*)(qw2.get0());
-    addr5 = (int16_t*)(v_extract<1>(qw2, v_setzero_u64()).get0());
-    addr6 = (int16_t*)(qw3.get0());
-    addr7 = (int16_t*)(v_extract<1>(qw3, v_setzero_u64()).get0());
+    addr0 = (int16_t*)(addrQw0.get0());
+    addr1 = (int16_t*)(v_extract<1>(addrQw0, v_setzero_u64()).get0());
+    addr2 = (int16_t*)(addrQw1.get0());
+    addr3 = (int16_t*)(v_extract<1>(addrQw1, v_setzero_u64()).get0());
+    addr4 = (int16_t*)(addrQw2.get0());
+    addr5 = (int16_t*)(v_extract<1>(addrQw2, v_setzero_u64()).get0());
+    addr6 = (int16_t*)(addrQw3.get0());
+    addr7 = (int16_t*)(v_extract<1>(addrQw3, v_setzero_u64()).get0());
 #else
     //32-bit code
-    dw0 += v_setall_u32((unsigned)LUT);
-    dw1 += v_setall_u32((unsigned)LUT);
+    addrDw0 += v_setall_u32((unsigned)LUT);
+    addrDw1 += v_setall_u32((unsigned)LUT);
 
-    addr0 = (int16_t*)(dw0.get0());
-    addr1 = (int16_t*)(v_extract<1>(dw0, v_setzero_u32()).get0());
-    addr2 = (int16_t*)(v_extract<2>(dw0, v_setzero_u32()).get0());
-    addr3 = (int16_t*)(v_extract<3>(dw0, v_setzero_u32()).get0());
-    addr4 = (int16_t*)(dw1.get0());
-    addr5 = (int16_t*)(v_extract<1>(dw1, v_setzero_u32()).get0());
-    addr6 = (int16_t*)(v_extract<2>(dw1, v_setzero_u32()).get0());
-    addr7 = (int16_t*)(v_extract<3>(dw1, v_setzero_u32()).get0());
+    addr0 = (int16_t*)(addrDw0.get0());
+    addr1 = (int16_t*)(v_extract<1>(addrDw0, v_setzero_u32()).get0());
+    addr2 = (int16_t*)(v_extract<2>(addrDw0, v_setzero_u32()).get0());
+    addr3 = (int16_t*)(v_extract<3>(addrDw0, v_setzero_u32()).get0());
+    addr4 = (int16_t*)(addrDw1.get0());
+    addr5 = (int16_t*)(v_extract<1>(addrDw1, v_setzero_u32()).get0());
+    addr6 = (int16_t*)(v_extract<2>(addrDw1, v_setzero_u32()).get0());
+    addr7 = (int16_t*)(v_extract<3>(addrDw1, v_setzero_u32()).get0());
 #endif
 
-    a0 = v_load(addr0); b0 = v_load(addr0 + 8); c0 = v_load(addr0 + 16);
-    a1 = v_load(addr1); b1 = v_load(addr1 + 8); c1 = v_load(addr1 + 16);
-    a2 = v_load(addr2); b2 = v_load(addr2 + 8); c1 = v_load(addr2 + 16);
-    a3 = v_load(addr1); b3 = v_load(addr3 + 8); c1 = v_load(addr3 + 16);
-    a4 = v_load(addr1); b4 = v_load(addr4 + 8); c1 = v_load(addr4 + 16);
-    a5 = v_load(addr1); b5 = v_load(addr5 + 8); c1 = v_load(addr5 + 16);
-    a6 = v_load(addr1); b6 = v_load(addr6 + 8); c1 = v_load(addr6 + 16);
-    a7 = v_load(addr1); b7 = v_load(addr7 + 8); c1 = v_load(addr7 + 16);
+#define LOAD_ABC(n) a##n = v_load(addr##n); b##n = v_load(addr##n + 8); c##n = v_load(addr##n + 16)
+    LOAD_ABC(0);
+    LOAD_ABC(1);
+    LOAD_ABC(2);
+    LOAD_ABC(3);
+    LOAD_ABC(4);
+    LOAD_ABC(5);
+    LOAD_ABC(6);
+    LOAD_ABC(7);
+#undef LOAD_ABC
 
     //interpolation weights for pix0, pix1, .., pix7
     v_int16x8 w0, w1, w2, w3, w4, w5, w6, w7;
-    v_uint16x8 wAddrs = v_setall_u16(8)*fracX +
-                        v_setall_u16(8*TRILINEAR_BASE)*fracY +
-                        v_setall_u16(8*TRILINEAR_BASE*TRILINEAR_BASE)*fracZ;
-    v_expand(wAddrs, dw0, dw1);
+    //"2*" for int16 size
+    v_mul_expand(v_setall_u16(2*8), fracX, addrDw0, addrDw1);
+    v_mul_expand(v_setall_u16(2*8*TRILINEAR_BASE), fracY, addrDw10, addrDw11);
+    addrDw0 += addrDw10; addrDw1 += addrDw11;
+    v_mul_expand(v_setall_u16(2*8*TRILINEAR_BASE*TRILINEAR_BASE), fracZ, addrDw10, addrDw11);
+    addrDw0 += addrDw10; addrDw1 += addrDw11;
 
 #if SIZE_MAX > UINT_MAX
     //64-bit code
-    v_expand(dw0, qw0, qw1); v_expand(dw1, qw2, qw3);
+    v_expand(addrDw0, addrQw0, addrQw1); v_expand(addrDw1, addrQw2, addrQw3);
 
-    v_uint64x2 wBaseAddr0 = v_setall_u64((uint64_t)trilinearLUT) + qw0;
-    v_uint64x2 wBaseAddr2 = v_setall_u64((uint64_t)trilinearLUT) + qw1;
-    v_uint64x2 wBaseAddr4 = v_setall_u64((uint64_t)trilinearLUT) + qw2;
-    v_uint64x2 wBaseAddr6 = v_setall_u64((uint64_t)trilinearLUT) + qw3;
+    v_uint64x2 wBaseAddr0 = v_setall_u64((uint64_t)trilinearLUT) + addrQw0;
+    v_uint64x2 wBaseAddr2 = v_setall_u64((uint64_t)trilinearLUT) + addrQw1;
+    v_uint64x2 wBaseAddr4 = v_setall_u64((uint64_t)trilinearLUT) + addrQw2;
+    v_uint64x2 wBaseAddr6 = v_setall_u64((uint64_t)trilinearLUT) + addrQw3;
 
     w0 = v_load((int16_t*)wBaseAddr0.get0());
     w1 = v_load((int16_t*)v_extract<1>(wBaseAddr0, v_setzero_u64()).get0());
@@ -2771,8 +2805,8 @@ static inline void trilinearPackedInterpolate(const v_uint16x8 inX, const v_uint
     w7 = v_load((int16_t*)v_extract<1>(wBaseAddr6, v_setzero_u64()).get0());
 #else
     //32-bit code
-    v_uint32x4 wBaseAddr0 = v_setall_u32((uint32_t)trilinearLUT) + dw0;
-    v_uint32x4 wBaseAddr1 = v_setall_u32((uint32_t)trilinearLUT) + dw1;
+    v_uint32x4 wBaseAddr0 = v_setall_u32((uint32_t)trilinearLUT) + addrDw0;
+    v_uint32x4 wBaseAddr1 = v_setall_u32((uint32_t)trilinearLUT) + addrDw1;
 
     w0 = v_load((int16_t*)wBaseAddr0.get0());
     w1 = v_load((int16_t*)v_extract<1>(wBaseAddr0, v_setzero_u32()).get0());
@@ -2786,41 +2820,24 @@ static inline void trilinearPackedInterpolate(const v_uint16x8 inX, const v_uint
 
     //outA = descale(v_reg<8>(sum(dot(ai, wi))))
     v_uint32x4 part0, part1;
-    part0 = v_uint32x4(v_reduce_sum(v_dotprod(a0, w0)),
-                       v_reduce_sum(v_dotprod(a1, w1)),
-                       v_reduce_sum(v_dotprod(a2, w2)),
-                       v_reduce_sum(v_dotprod(a3, w3)));
-    part1 = v_uint32x4(v_reduce_sum(v_dotprod(a4, w4)),
-                       v_reduce_sum(v_dotprod(a5, w5)),
-                       v_reduce_sum(v_dotprod(a6, w6)),
-                       v_reduce_sum(v_dotprod(a7, w7)));
-    part0 = (part0 + v_setall_u32(1 << (trilinear_shift*3-1))) >> (trilinear_shift*3);
-    part1 = (part1 + v_setall_u32(1 << (trilinear_shift*3-1))) >> (trilinear_shift*3);
-    outA = v_pack(part0, part1);
+#define DOT_SHIFT_PACK(l, ll) \
+    part0 = v_uint32x4(v_reduce_sum(v_dotprod(l##0, w0)),\
+                       v_reduce_sum(v_dotprod(l##1, w1)),\
+                       v_reduce_sum(v_dotprod(l##2, w2)),\
+                       v_reduce_sum(v_dotprod(l##3, w3)));\
+    part1 = v_uint32x4(v_reduce_sum(v_dotprod(l##4, w4)),\
+                       v_reduce_sum(v_dotprod(l##5, w5)),\
+                       v_reduce_sum(v_dotprod(l##6, w6)),\
+                       v_reduce_sum(v_dotprod(l##7, w7)));\
+    part0 = (part0 + v_setall_u32(1 << (trilinear_shift*3-1))) >> (trilinear_shift*3);\
+    part1 = (part1 + v_setall_u32(1 << (trilinear_shift*3-1))) >> (trilinear_shift*3);\
+    (ll) = v_pack(part0, part1)
 
-    part0 = v_uint32x4(v_reduce_sum(v_dotprod(b0, w0)),
-                       v_reduce_sum(v_dotprod(b1, w1)),
-                       v_reduce_sum(v_dotprod(b2, w2)),
-                       v_reduce_sum(v_dotprod(b3, w3)));
-    part1 = v_uint32x4(v_reduce_sum(v_dotprod(b4, w4)),
-                       v_reduce_sum(v_dotprod(b5, w5)),
-                       v_reduce_sum(v_dotprod(b6, w6)),
-                       v_reduce_sum(v_dotprod(b7, w7)));
-    part0 = (part0 + v_setall_u32(1 << (trilinear_shift*3-1))) >> (trilinear_shift*3);
-    part1 = (part1 + v_setall_u32(1 << (trilinear_shift*3-1))) >> (trilinear_shift*3);
-    outB = v_pack(part0, part1);
+    DOT_SHIFT_PACK(a, outA);
+    DOT_SHIFT_PACK(b, outB);
+    DOT_SHIFT_PACK(c, outC);
 
-    part0 = v_uint32x4(v_reduce_sum(v_dotprod(c0, w0)),
-                       v_reduce_sum(v_dotprod(c1, w1)),
-                       v_reduce_sum(v_dotprod(c2, w2)),
-                       v_reduce_sum(v_dotprod(c3, w3)));
-    part1 = v_uint32x4(v_reduce_sum(v_dotprod(c4, w4)),
-                       v_reduce_sum(v_dotprod(c5, w5)),
-                       v_reduce_sum(v_dotprod(c6, w6)),
-                       v_reduce_sum(v_dotprod(c7, w7)));
-    part0 = (part0 + v_setall_u32(1 << (trilinear_shift*3-1))) >> (trilinear_shift*3);
-    part1 = (part1 + v_setall_u32(1 << (trilinear_shift*3-1))) >> (trilinear_shift*3);
-    outC = v_pack(part0, part1);
+#undef DOT_SHIFT_PACK
 }
 
 
@@ -3270,11 +3287,18 @@ struct RGB2Lab_b
         i = 0;
         if(useTetraInterpolation)
         {
-            for(; i < n; i += 3*8*2, src += scn*8*2)
+            for(; enablePacked && (i <= n-3*8*2); i += 3*8*2, src += scn*8*2)
             {
-                v_uint8x16 u8r, u8g, u8b;
                 v_uint16x8 rvec0, rvec1, gvec0, gvec1, bvec0, bvec1, dummy;
-                v_load_deinterleave(src, u8r, u8g, u8b);
+                v_uint8x16 u8r, u8g, u8b, u8a;
+                if(scn == 3)
+                {
+                    v_load_deinterleave(src, u8r, u8g, u8b);
+                }
+                else if(scn == 4)
+                {
+                    v_load_deinterleave(src, u8r, u8g, u8b, u8a);
+                }
                 v_expand(u8r, rvec0, rvec1);
                 v_expand(u8g, gvec0, gvec1);
                 v_expand(u8b, bvec0, bvec1);
@@ -3285,9 +3309,10 @@ struct RGB2Lab_b
                     dummy = rvec1; rvec1 = bvec1; bvec1 = dummy;
                 }
 
-                v_uint16x8 scaleReg = v_setall_u16(LAB_BASE/255);
-                rvec0 *= scaleReg; gvec0 *= scaleReg; bvec0 *= scaleReg;
-                rvec1 *= scaleReg; gvec1 *= scaleReg; bvec1 *= scaleReg;
+                // (r, g, b) *= (LAB_BASE/256);
+                rvec0 = rvec0 << (lab_base_shift - 8); rvec1 = rvec1 << (lab_base_shift - 8);
+                gvec0 = gvec0 << (lab_base_shift - 8); gvec1 = gvec1 << (lab_base_shift - 8);
+                bvec0 = bvec0 << (lab_base_shift - 8); bvec1 = bvec1 << (lab_base_shift - 8);
 
                 //don't use XYZ table for RGB2Lab
                 v_uint16x8 l_vec0, l_vec1, a_vec0, a_vec1, b_vec0, b_vec1;
@@ -3303,7 +3328,7 @@ struct RGB2Lab_b
                 v_uint8x16 u8_a = v_pack(a_vec0, a_vec1);
                 v_uint8x16 u8_b = v_pack(b_vec0, b_vec1);
 
-                v_store_interleave(dst, u8_l, u8_a, u8_b);
+                v_store_interleave(dst + i, u8_l, u8_a, u8_b);
             }
 
             for(; i < n; i += 3, src += scn)
@@ -3444,11 +3469,11 @@ struct Lab2RGB_b
         i = 0;
         if(useTetraInterpolation)
         {
-            for(; i < n*3*8*2; i += 3*8*2, dst += dcn*8*2)
+            for(; enablePacked && (i <= n*3-3*8*2); i += 3*8*2, dst += dcn*8*2)
             {
                 v_uint8x16 u8l, u8a, u8b;
                 v_uint16x8 lvec0, lvec1, avec0, avec1, bvec0, bvec1;
-                v_load_deinterleave(src, u8l, u8a, u8b);
+                v_load_deinterleave(src + i, u8l, u8a, u8b);
                 v_expand(u8l, lvec0, lvec1);
                 v_expand(u8a, avec0, avec1);
                 v_expand(u8b, bvec0, bvec1);
@@ -3492,8 +3517,6 @@ struct Lab2RGB_b
                 v_uint32x4 g32_00, g32_01, g32_10, g32_11;
                 v_uint32x4 b32_00, b32_01, b32_10, b32_11;
                 v_uint32x4 descaleReg = v_setall_u32(1 << ((shift)-1));
-                //( + descaleReg) >> shift;
-                //TODO: this
                 v_uint32x4 c0reg = v_setall_u32(C0), c1reg = v_setall_u32(C1), c2reg = v_setall_u32(C2),
                            c3reg = v_setall_u32(C3), c4reg = v_setall_u32(C4), c5reg = v_setall_u32(C5),
                            c6reg = v_setall_u32(C6), c7reg = v_setall_u32(C7), c8reg = v_setall_u32(C8);
@@ -3526,70 +3549,33 @@ struct Lab2RGB_b
                 b_vec0 = v_max(v_setzero_u16(), v_min(b_vec0, tabsz));
                 b_vec1 = v_max(v_setzero_u16(), v_min(b_vec1, tabsz));
 
-                //ro = tab[ro];
-                r_vec0 = v_uint16x8(tab[r_vec0.get0()],
-                        tab[v_extract<1>(r_vec0, v_setzero_u16()).get0()],
-                        tab[v_extract<2>(r_vec0, v_setzero_u16()).get0()],
-                        tab[v_extract<3>(r_vec0, v_setzero_u16()).get0()],
-                        tab[v_extract<4>(r_vec0, v_setzero_u16()).get0()],
-                        tab[v_extract<5>(r_vec0, v_setzero_u16()).get0()],
-                        tab[v_extract<6>(r_vec0, v_setzero_u16()).get0()],
-                        tab[v_extract<7>(r_vec0, v_setzero_u16()).get0()]);
-                r_vec1 = v_uint16x8(tab[r_vec1.get0()],
-                        tab[v_extract<1>(r_vec1, v_setzero_u16()).get0()],
-                        tab[v_extract<2>(r_vec1, v_setzero_u16()).get0()],
-                        tab[v_extract<3>(r_vec1, v_setzero_u16()).get0()],
-                        tab[v_extract<4>(r_vec1, v_setzero_u16()).get0()],
-                        tab[v_extract<5>(r_vec1, v_setzero_u16()).get0()],
-                        tab[v_extract<6>(r_vec1, v_setzero_u16()).get0()],
-                        tab[v_extract<7>(r_vec1, v_setzero_u16()).get0()]);
+                //ro = tab[ro]; go = tab[go]; bo = tab[bo];
+#define GAMMA_TAB_SUBST(reg) \
+                (reg) = v_uint16x8(tab[(reg).get0()],\
+                                   tab[v_extract<1>((reg), v_setzero_u16()).get0()],\
+                                   tab[v_extract<2>((reg), v_setzero_u16()).get0()],\
+                                   tab[v_extract<3>((reg), v_setzero_u16()).get0()],\
+                                   tab[v_extract<4>((reg), v_setzero_u16()).get0()],\
+                                   tab[v_extract<5>((reg), v_setzero_u16()).get0()],\
+                                   tab[v_extract<6>((reg), v_setzero_u16()).get0()],\
+                                   tab[v_extract<7>((reg), v_setzero_u16()).get0()])
 
-                //go = tab[go];
-                g_vec0 = v_uint16x8(tab[g_vec0.get0()],
-                        tab[v_extract<1>(g_vec0, v_setzero_u16()).get0()],
-                        tab[v_extract<2>(g_vec0, v_setzero_u16()).get0()],
-                        tab[v_extract<3>(g_vec0, v_setzero_u16()).get0()],
-                        tab[v_extract<4>(g_vec0, v_setzero_u16()).get0()],
-                        tab[v_extract<5>(g_vec0, v_setzero_u16()).get0()],
-                        tab[v_extract<6>(g_vec0, v_setzero_u16()).get0()],
-                        tab[v_extract<7>(g_vec0, v_setzero_u16()).get0()]);
-                g_vec1 = v_uint16x8(tab[g_vec1.get0()],
-                        tab[v_extract<1>(g_vec1, v_setzero_u16()).get0()],
-                        tab[v_extract<2>(g_vec1, v_setzero_u16()).get0()],
-                        tab[v_extract<3>(g_vec1, v_setzero_u16()).get0()],
-                        tab[v_extract<4>(g_vec1, v_setzero_u16()).get0()],
-                        tab[v_extract<5>(g_vec1, v_setzero_u16()).get0()],
-                        tab[v_extract<6>(g_vec1, v_setzero_u16()).get0()],
-                        tab[v_extract<7>(g_vec1, v_setzero_u16()).get0()]);
+                GAMMA_TAB_SUBST(r_vec0); GAMMA_TAB_SUBST(r_vec1);
+                GAMMA_TAB_SUBST(g_vec0); GAMMA_TAB_SUBST(g_vec1);
+                GAMMA_TAB_SUBST(b_vec0); GAMMA_TAB_SUBST(b_vec1);
 
-                //bo = tab[bo];
-                b_vec0 = v_uint16x8(tab[b_vec0.get0()],
-                        tab[v_extract<1>(b_vec0, v_setzero_u16()).get0()],
-                        tab[v_extract<2>(b_vec0, v_setzero_u16()).get0()],
-                        tab[v_extract<3>(b_vec0, v_setzero_u16()).get0()],
-                        tab[v_extract<4>(b_vec0, v_setzero_u16()).get0()],
-                        tab[v_extract<5>(b_vec0, v_setzero_u16()).get0()],
-                        tab[v_extract<6>(b_vec0, v_setzero_u16()).get0()],
-                        tab[v_extract<7>(b_vec0, v_setzero_u16()).get0()]);
-                b_vec1 = v_uint16x8(tab[b_vec1.get0()],
-                        tab[v_extract<1>(b_vec1, v_setzero_u16()).get0()],
-                        tab[v_extract<2>(b_vec1, v_setzero_u16()).get0()],
-                        tab[v_extract<3>(b_vec1, v_setzero_u16()).get0()],
-                        tab[v_extract<4>(b_vec1, v_setzero_u16()).get0()],
-                        tab[v_extract<5>(b_vec1, v_setzero_u16()).get0()],
-                        tab[v_extract<6>(b_vec1, v_setzero_u16()).get0()],
-                        tab[v_extract<7>(b_vec1, v_setzero_u16()).get0()]);
-
-                v_uint16x8 dummy;
-                if(bIdx > 0)
-                {
-                    dummy = r_vec0; r_vec0 = b_vec0; b_vec0 = r_vec0;
-                    dummy = r_vec1; r_vec1 = b_vec1; b_vec1 = r_vec1;
-                }
+#undef GAMMA_TAB_SUBST
 
                 v_uint8x16 u8_b = v_pack(b_vec0, b_vec1);
                 v_uint8x16 u8_g = v_pack(g_vec0, g_vec1);
                 v_uint8x16 u8_r = v_pack(r_vec0, r_vec1);
+
+                v_uint8x16 dummy;
+                if(bIdx > 0)
+                {
+                    dummy = u8_r; u8_r = u8_b; u8_b = dummy;
+                }
+
                 if(dcn == 4)
                 {
                     v_uint8x16 u8_alpha = v_setall_u8(alpha);
@@ -3796,17 +3782,14 @@ struct Lab2RGB_b
 
 /////////////
 
-#define SET_INTER(x) interType = (x); strIterType = #x;
-
 TEST(ImgProc_Color, LabCheckWorking)
 {
     cv::setUseOptimized(false);
 
-    std::string strIterType;
-
     //settings
     #define INT_DATA 1
-    #define TO_BGR 0
+    #define TO_BGR 1
+    const bool randomFill = true;
 
     enableTetraInterpolation = true;
     Lab2RGB_f interToBgr(3, 0, 0, 0, true);
@@ -4028,6 +4011,53 @@ TEST(ImgProc_Color, LabCheckWorking)
         tmp = INT_DATA ? backInterDiff : (TO_BGR ? backInterDiff+128 : backInterDiff*256);
         imwrite(format((dir + "backinterdiff%03d.png").c_str(), (TO_BGR ? l : blue)), tmp);
 
+        if(randomFill)
+        {
+            RNG rng;
+            for(size_t p = 0; p < pSize; p++)
+            {
+                float* pRow   = mSrc.ptr<float>(p);
+                uchar* pRow_b = mSrc.ptr<uchar>(p);
+                for(size_t q = 0; q < pSize; q++)
+                {
+                    if(INT_DATA)
+                    {
+                        if(TO_BGR)
+                        {
+                            //Lab
+                            pRow_b[3*q + 0] = rng(256)*255/100;
+                            pRow_b[3*q + 1] = rng(256);
+                            pRow_b[3*q + 2] = rng(256);
+                        }
+                        else
+                        {
+                            //BGR
+                            pRow_b[3*q + 0] = rng(256);
+                            pRow_b[3*q + 1] = rng(256);
+                            pRow_b[3*q + 2] = rng(256);
+                        }
+                    }
+                    else
+                    {
+                        if(TO_BGR)
+                        {
+                            //Lab
+                            pRow[3*q + 0] = (float)rng*100.0f;
+                            pRow[3*q + 1] = 256.0f*(float)rng-128.0f;
+                            pRow[3*q + 2] = 256.0f*(float)rng-128.0f;
+                        }
+                        else
+                        {
+                            //BGR
+                            pRow[3*q + 0] = (float)rng;
+                            pRow[3*q + 1] = (float)rng;
+                            pRow[3*q + 2] = (float)rng;
+                        }
+                    }
+                }
+            }
+        }
+
         //perf test
         std::cout << "perf: ";
         TickMeter tm; double t;
@@ -4145,6 +4175,4 @@ TEST(ImgProc_Color, LabCheckWorking)
     std::cout << "inter rgb2lab: " << times[2] << " ";
     std::cout << "gold rgb2lab: "  << times[3] << " ";
     std::cout << std::endl;
-
-#undef SET_INTER
 }
