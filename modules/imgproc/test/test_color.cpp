@@ -2401,8 +2401,11 @@ static int16_t Lab2XYZLUT_s16[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3*8];
 static int16_t XYZ2LabLUT_s16[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3*8];
 static int16_t trilinearLUT[TRILINEAR_BASE*TRILINEAR_BASE*TRILINEAR_BASE*8];
 
-//v*16384/255 ~~ v*16384/256 + v/4
-#define DIV255(reg) (reg) = ((reg) << (lab_base_shift - 8)) + ((reg) >> 2)
+//v*16384/255 ~~ v*16384/256 + v/4 if v in [0; 255]
+static inline void div255(v_uint16x8& reg)
+{
+    reg = (reg << (lab_base_shift - 8)) + (reg >> 2);
+}
 
 #define clip(value) \
     value < 0.0f ? 0.0f : value > 1.0f ? 1.0f : value;
@@ -2747,26 +2750,26 @@ static inline void trilinearPackedInterpolate(const v_uint16x8 inX, const v_uint
     addrQw3 += v_setall_u64((uint64)LUT);
 
     addr0 = (int16_t*)(addrQw0.get0());
-    addr1 = (int16_t*)(v_extract<1>(addrQw0, v_setzero_u64()).get0());
+    addr1 = (int16_t*)(v_extract<1>(addrQw0, addrQw0).get0());
     addr2 = (int16_t*)(addrQw1.get0());
-    addr3 = (int16_t*)(v_extract<1>(addrQw1, v_setzero_u64()).get0());
+    addr3 = (int16_t*)(v_extract<1>(addrQw1, addrQw1).get0());
     addr4 = (int16_t*)(addrQw2.get0());
-    addr5 = (int16_t*)(v_extract<1>(addrQw2, v_setzero_u64()).get0());
+    addr5 = (int16_t*)(v_extract<1>(addrQw2, addrQw2).get0());
     addr6 = (int16_t*)(addrQw3.get0());
-    addr7 = (int16_t*)(v_extract<1>(addrQw3, v_setzero_u64()).get0());
+    addr7 = (int16_t*)(v_extract<1>(addrQw3, addrQw3).get0());
 #else
     //32-bit code
     addrDw0 += v_setall_u32((unsigned)LUT);
     addrDw1 += v_setall_u32((unsigned)LUT);
 
     addr0 = (int16_t*)(addrDw0.get0());
-    addr1 = (int16_t*)(v_extract<1>(addrDw0, v_setzero_u32()).get0());
-    addr2 = (int16_t*)(v_extract<2>(addrDw0, v_setzero_u32()).get0());
-    addr3 = (int16_t*)(v_extract<3>(addrDw0, v_setzero_u32()).get0());
+    addr1 = (int16_t*)(v_extract<1>(addrDw0, addrDw0).get0());
+    addr2 = (int16_t*)(v_extract<2>(addrDw0, addrDw0).get0());
+    addr3 = (int16_t*)(v_extract<3>(addrDw0, addrDw0).get0());
     addr4 = (int16_t*)(addrDw1.get0());
-    addr5 = (int16_t*)(v_extract<1>(addrDw1, v_setzero_u32()).get0());
-    addr6 = (int16_t*)(v_extract<2>(addrDw1, v_setzero_u32()).get0());
-    addr7 = (int16_t*)(v_extract<3>(addrDw1, v_setzero_u32()).get0());
+    addr5 = (int16_t*)(v_extract<1>(addrDw1, addrDw1).get0());
+    addr6 = (int16_t*)(v_extract<2>(addrDw1, addrDw1).get0());
+    addr7 = (int16_t*)(v_extract<3>(addrDw1, addrDw1).get0());
 #endif
 
 #define LOAD_ABC(n) a##n = v_load(addr##n); b##n = v_load(addr##n + 8); c##n = v_load(addr##n + 16)
@@ -2799,26 +2802,26 @@ static inline void trilinearPackedInterpolate(const v_uint16x8 inX, const v_uint
     v_uint64x2 wBaseAddr6 = v_setall_u64((uint64_t)trilinearLUT) + addrQw3;
 
     w0 = v_load((int16_t*)wBaseAddr0.get0());
-    w1 = v_load((int16_t*)v_extract<1>(wBaseAddr0, v_setzero_u64()).get0());
+    w1 = v_load((int16_t*)v_extract<1>(wBaseAddr0, wBaseAddr0).get0());
     w2 = v_load((int16_t*)wBaseAddr2.get0());
-    w3 = v_load((int16_t*)v_extract<1>(wBaseAddr2, v_setzero_u64()).get0());
+    w3 = v_load((int16_t*)v_extract<1>(wBaseAddr2, wBaseAddr2).get0());
     w4 = v_load((int16_t*)wBaseAddr4.get0());
-    w5 = v_load((int16_t*)v_extract<1>(wBaseAddr4, v_setzero_u64()).get0());
+    w5 = v_load((int16_t*)v_extract<1>(wBaseAddr4, wBaseAddr4).get0());
     w6 = v_load((int16_t*)wBaseAddr6.get0());
-    w7 = v_load((int16_t*)v_extract<1>(wBaseAddr6, v_setzero_u64()).get0());
+    w7 = v_load((int16_t*)v_extract<1>(wBaseAddr6, wBaseAddr6).get0());
 #else
     //32-bit code
     v_uint32x4 wBaseAddr0 = v_setall_u32((uint32_t)trilinearLUT) + addrDw0;
     v_uint32x4 wBaseAddr1 = v_setall_u32((uint32_t)trilinearLUT) + addrDw1;
 
     w0 = v_load((int16_t*)wBaseAddr0.get0());
-    w1 = v_load((int16_t*)v_extract<1>(wBaseAddr0, v_setzero_u32()).get0());
-    w2 = v_load((int16_t*)v_extract<2>(wBaseAddr0, v_setzero_u32()).get0());
-    w3 = v_load((int16_t*)v_extract<3>(wBaseAddr0, v_setzero_u32()).get0());
+    w1 = v_load((int16_t*)v_extract<1>(wBaseAddr0, wBaseAddr0).get0());
+    w2 = v_load((int16_t*)v_extract<2>(wBaseAddr0, wBaseAddr0).get0());
+    w3 = v_load((int16_t*)v_extract<3>(wBaseAddr0, wBaseAddr0).get0());
     w4 = v_load((int16_t*)wBaseAddr1.get0());
-    w5 = v_load((int16_t*)v_extract<1>(wBaseAddr1, v_setzero_u32()).get0());
-    w6 = v_load((int16_t*)v_extract<2>(wBaseAddr1, v_setzero_u32()).get0());
-    w7 = v_load((int16_t*)v_extract<3>(wBaseAddr1, v_setzero_u32()).get0());
+    w5 = v_load((int16_t*)v_extract<1>(wBaseAddr1, wBaseAddr1).get0());
+    w6 = v_load((int16_t*)v_extract<2>(wBaseAddr1, wBaseAddr1).get0());
+    w7 = v_load((int16_t*)v_extract<3>(wBaseAddr1, wBaseAddr1).get0());
 #endif
 
     //outA = descale(v_reg<8>(sum(dot(ai, wi))))
@@ -3313,9 +3316,9 @@ struct RGB2Lab_b
                 }
 
                 // (r, g, b) *= (LAB_BASE/255);
-                DIV255(rvec0); DIV255(rvec1);
-                DIV255(gvec0); DIV255(gvec1);
-                DIV255(bvec0); DIV255(bvec1);
+                div255(rvec0); div255(rvec1);
+                div255(gvec0); div255(gvec1);
+                div255(bvec0); div255(bvec1);
 
                 //don't use XYZ table for RGB2Lab
                 v_uint16x8 l_vec0, l_vec1, a_vec0, a_vec1, b_vec0, b_vec1;
@@ -3489,7 +3492,7 @@ struct Lab2RGB_b
                 v_expand(u8b, bvec0, bvec1);
 
                 //l = l*LAB_BASE/255
-                DIV255(lvec0); DIV255(lvec1);
+                div255(lvec0); div255(lvec1);
                 //(a, b) * = LAB_BASE/256
                 avec0 = avec0 << (lab_base_shift - 8); avec1 = avec1 << (lab_base_shift - 8);
                 bvec0 = bvec0 << (lab_base_shift - 8); bvec1 = bvec1 << (lab_base_shift - 8);
@@ -3569,13 +3572,13 @@ struct Lab2RGB_b
                 //ro = tab[ro]; go = tab[go]; bo = tab[bo];
 #define GAMMA_TAB_SUBST(reg) \
                 (reg) = v_uint16x8(tab[(reg).get0()],\
-                                   tab[v_extract<1>((reg), v_setzero_u16()).get0()],\
-                                   tab[v_extract<2>((reg), v_setzero_u16()).get0()],\
-                                   tab[v_extract<3>((reg), v_setzero_u16()).get0()],\
-                                   tab[v_extract<4>((reg), v_setzero_u16()).get0()],\
-                                   tab[v_extract<5>((reg), v_setzero_u16()).get0()],\
-                                   tab[v_extract<6>((reg), v_setzero_u16()).get0()],\
-                                   tab[v_extract<7>((reg), v_setzero_u16()).get0()])
+                                   tab[v_extract<1>((reg), (reg)).get0()],\
+                                   tab[v_extract<2>((reg), (reg)).get0()],\
+                                   tab[v_extract<3>((reg), (reg)).get0()],\
+                                   tab[v_extract<4>((reg), (reg)).get0()],\
+                                   tab[v_extract<5>((reg), (reg)).get0()],\
+                                   tab[v_extract<6>((reg), (reg)).get0()],\
+                                   tab[v_extract<7>((reg), (reg)).get0()])
 
                 GAMMA_TAB_SUBST(r_vec0); GAMMA_TAB_SUBST(r_vec1);
                 GAMMA_TAB_SUBST(g_vec0); GAMMA_TAB_SUBST(g_vec1);
