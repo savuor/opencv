@@ -2727,52 +2727,23 @@ static inline void trilinearPackedInterpolate(const v_uint16x8 inX, const v_uint
     v_uint16x8 fracZ = (inZ >> (lab_base_shift - 8 - 1)) & bitMaskReg;
 
     //load values to interpolate for pix0, pix1, .., pix7
-    int16_t* addr0, *addr1, *addr2, *addr3, *addr4, *addr5, *addr6, *addr7;
     v_int16x8 a0, a1, a2, a3, a4, a5, a6, a7;
     v_int16x8 b0, b1, b2, b3, b4, b5, b6, b7;
     v_int16x8 c0, c1, c2, c3, c4, c5, c6, c7;
 
-    //"2*" for int16 size
     v_uint32x4 addrDw0, addrDw1, addrDw10, addrDw11;
-    v_mul_expand(v_setall_u16(2*3*8), idxsX, addrDw0, addrDw1);
-    v_mul_expand(v_setall_u16(2*3*8*LAB_LUT_DIM), idxsY, addrDw10, addrDw11);
+    v_mul_expand(v_setall_u16(3*8), idxsX, addrDw0, addrDw1);
+    v_mul_expand(v_setall_u16(3*8*LAB_LUT_DIM), idxsY, addrDw10, addrDw11);
     addrDw0 += addrDw10; addrDw1 += addrDw11;
-    v_mul_expand(v_setall_u16(2*3*8*LAB_LUT_DIM*LAB_LUT_DIM), idxsZ, addrDw10, addrDw11);
+    v_mul_expand(v_setall_u16(3*8*LAB_LUT_DIM*LAB_LUT_DIM), idxsZ, addrDw10, addrDw11);
     addrDw0 += addrDw10; addrDw1 += addrDw11;
 
-#if SIZE_MAX > UINT_MAX
-    //64-bit code
-    v_uint64x2 addrQw0, addrQw1, addrQw2, addrQw3;
-    v_expand(addrDw0, addrQw0, addrQw1); v_expand(addrDw1, addrQw2, addrQw3);
-    addrQw0 += v_setall_u64((uint64)LUT);
-    addrQw1 += v_setall_u64((uint64)LUT);
-    addrQw2 += v_setall_u64((uint64)LUT);
-    addrQw3 += v_setall_u64((uint64)LUT);
+    uint32_t CV_DECL_ALIGNED(16) addrofs[8];
+    v_store_aligned(addrofs, addrDw0);
+    v_store_aligned(addrofs + 4, addrDw1);
 
-    addr0 = (int16_t*)(addrQw0.get0());
-    addr1 = (int16_t*)(v_extract<1>(addrQw0, addrQw0).get0());
-    addr2 = (int16_t*)(addrQw1.get0());
-    addr3 = (int16_t*)(v_extract<1>(addrQw1, addrQw1).get0());
-    addr4 = (int16_t*)(addrQw2.get0());
-    addr5 = (int16_t*)(v_extract<1>(addrQw2, addrQw2).get0());
-    addr6 = (int16_t*)(addrQw3.get0());
-    addr7 = (int16_t*)(v_extract<1>(addrQw3, addrQw3).get0());
-#else
-    //32-bit code
-    addrDw0 += v_setall_u32((unsigned)LUT);
-    addrDw1 += v_setall_u32((unsigned)LUT);
-
-    addr0 = (int16_t*)(addrDw0.get0());
-    addr1 = (int16_t*)(v_extract<1>(addrDw0, addrDw0).get0());
-    addr2 = (int16_t*)(v_extract<2>(addrDw0, addrDw0).get0());
-    addr3 = (int16_t*)(v_extract<3>(addrDw0, addrDw0).get0());
-    addr4 = (int16_t*)(addrDw1.get0());
-    addr5 = (int16_t*)(v_extract<1>(addrDw1, addrDw1).get0());
-    addr6 = (int16_t*)(v_extract<2>(addrDw1, addrDw1).get0());
-    addr7 = (int16_t*)(v_extract<3>(addrDw1, addrDw1).get0());
-#endif
-
-#define LOAD_ABC(n) a##n = v_load(addr##n); b##n = v_load(addr##n + 8); c##n = v_load(addr##n + 16)
+    const int16_t* ptr;
+#define LOAD_ABC(n) ptr = LUT + addrofs[n]; a##n = v_load(ptr); b##n = v_load(ptr + 8); c##n = v_load(ptr + 16)
     LOAD_ABC(0);
     LOAD_ABC(1);
     LOAD_ABC(2);
@@ -2785,44 +2756,25 @@ static inline void trilinearPackedInterpolate(const v_uint16x8 inX, const v_uint
 
     //interpolation weights for pix0, pix1, .., pix7
     v_int16x8 w0, w1, w2, w3, w4, w5, w6, w7;
-    //"2*" for int16 size
-    v_mul_expand(v_setall_u16(2*8), fracX, addrDw0, addrDw1);
-    v_mul_expand(v_setall_u16(2*8*TRILINEAR_BASE), fracY, addrDw10, addrDw11);
+    v_mul_expand(v_setall_u16(8), fracX, addrDw0, addrDw1);
+    v_mul_expand(v_setall_u16(8*TRILINEAR_BASE), fracY, addrDw10, addrDw11);
     addrDw0 += addrDw10; addrDw1 += addrDw11;
-    v_mul_expand(v_setall_u16(2*8*TRILINEAR_BASE*TRILINEAR_BASE), fracZ, addrDw10, addrDw11);
+    v_mul_expand(v_setall_u16(8*TRILINEAR_BASE*TRILINEAR_BASE), fracZ, addrDw10, addrDw11);
     addrDw0 += addrDw10; addrDw1 += addrDw11;
 
-#if SIZE_MAX > UINT_MAX
-    //64-bit code
-    v_expand(addrDw0, addrQw0, addrQw1); v_expand(addrDw1, addrQw2, addrQw3);
+    v_store_aligned(addrofs, addrDw0);
+    v_store_aligned(addrofs + 4, addrDw1);
 
-    v_uint64x2 wBaseAddr0 = v_setall_u64((uint64_t)trilinearLUT) + addrQw0;
-    v_uint64x2 wBaseAddr2 = v_setall_u64((uint64_t)trilinearLUT) + addrQw1;
-    v_uint64x2 wBaseAddr4 = v_setall_u64((uint64_t)trilinearLUT) + addrQw2;
-    v_uint64x2 wBaseAddr6 = v_setall_u64((uint64_t)trilinearLUT) + addrQw3;
-
-    w0 = v_load((int16_t*)wBaseAddr0.get0());
-    w1 = v_load((int16_t*)v_extract<1>(wBaseAddr0, wBaseAddr0).get0());
-    w2 = v_load((int16_t*)wBaseAddr2.get0());
-    w3 = v_load((int16_t*)v_extract<1>(wBaseAddr2, wBaseAddr2).get0());
-    w4 = v_load((int16_t*)wBaseAddr4.get0());
-    w5 = v_load((int16_t*)v_extract<1>(wBaseAddr4, wBaseAddr4).get0());
-    w6 = v_load((int16_t*)wBaseAddr6.get0());
-    w7 = v_load((int16_t*)v_extract<1>(wBaseAddr6, wBaseAddr6).get0());
-#else
-    //32-bit code
-    v_uint32x4 wBaseAddr0 = v_setall_u32((uint32_t)trilinearLUT) + addrDw0;
-    v_uint32x4 wBaseAddr1 = v_setall_u32((uint32_t)trilinearLUT) + addrDw1;
-
-    w0 = v_load((int16_t*)wBaseAddr0.get0());
-    w1 = v_load((int16_t*)v_extract<1>(wBaseAddr0, wBaseAddr0).get0());
-    w2 = v_load((int16_t*)v_extract<2>(wBaseAddr0, wBaseAddr0).get0());
-    w3 = v_load((int16_t*)v_extract<3>(wBaseAddr0, wBaseAddr0).get0());
-    w4 = v_load((int16_t*)wBaseAddr1.get0());
-    w5 = v_load((int16_t*)v_extract<1>(wBaseAddr1, wBaseAddr1).get0());
-    w6 = v_load((int16_t*)v_extract<2>(wBaseAddr1, wBaseAddr1).get0());
-    w7 = v_load((int16_t*)v_extract<3>(wBaseAddr1, wBaseAddr1).get0());
-#endif
+#define LOAD_W(n) ptr = trilinearLUT + addrofs[n]; w##n = v_load(ptr)
+    LOAD_W(0);
+    LOAD_W(1);
+    LOAD_W(2);
+    LOAD_W(3);
+    LOAD_W(4);
+    LOAD_W(5);
+    LOAD_W(6);
+    LOAD_W(7);
+#undef LOAD_W
 
     //outA = descale(v_reg<8>(sum(dot(ai, wi))))
     v_uint32x4 part0, part1;
