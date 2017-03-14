@@ -3487,20 +3487,16 @@ struct Lab2RGB_b
                           c3reg = v_setall_s32(C3), c4reg = v_setall_s32(C4), c5reg = v_setall_s32(C5),
                           c6reg = v_setall_s32(C6), c7reg = v_setall_s32(C7), c8reg = v_setall_s32(C8);
 
-                rdw_00 = (xdw_00*c0reg + ydw_00*c1reg + zdw_00*c2reg + descaleReg) >> shift;
-                rdw_01 = (xdw_01*c0reg + ydw_01*c1reg + zdw_01*c2reg + descaleReg) >> shift;
-                rdw_10 = (xdw_10*c0reg + ydw_10*c1reg + zdw_10*c2reg + descaleReg) >> shift;
-                rdw_11 = (xdw_11*c0reg + ydw_11*c1reg + zdw_11*c2reg + descaleReg) >> shift;
+                #define MUL_XYZ(l, xn, yn, zn) \
+                    l##dw_00 = (xdw_00*c##xn##reg + ydw_00*c##yn##reg + zdw_00*c##zn##reg + descaleReg) >> shift;\
+                    l##dw_01 = (xdw_01*c##xn##reg + ydw_01*c##yn##reg + zdw_01*c##zn##reg + descaleReg) >> shift;\
+                    l##dw_10 = (xdw_10*c##xn##reg + ydw_10*c##yn##reg + zdw_10*c##zn##reg + descaleReg) >> shift;\
+                    l##dw_11 = (xdw_11*c##xn##reg + ydw_11*c##yn##reg + zdw_11*c##zn##reg + descaleReg) >> shift
 
-                gdw_00 = (xdw_00*c3reg + ydw_00*c4reg + zdw_00*c5reg + descaleReg) >> shift;
-                gdw_01 = (xdw_01*c3reg + ydw_01*c4reg + zdw_01*c5reg + descaleReg) >> shift;
-                gdw_10 = (xdw_10*c3reg + ydw_10*c4reg + zdw_10*c5reg + descaleReg) >> shift;
-                gdw_11 = (xdw_11*c3reg + ydw_11*c4reg + zdw_11*c5reg + descaleReg) >> shift;
-
-                bdw_00 = (xdw_00*c6reg + ydw_00*c7reg + zdw_00*c8reg + descaleReg) >> shift;
-                bdw_01 = (xdw_01*c6reg + ydw_01*c7reg + zdw_01*c8reg + descaleReg) >> shift;
-                bdw_10 = (xdw_10*c6reg + ydw_10*c7reg + zdw_10*c8reg + descaleReg) >> shift;
-                bdw_11 = (xdw_11*c6reg + ydw_11*c7reg + zdw_11*c8reg + descaleReg) >> shift;
+                MUL_XYZ(r, 0, 1, 2);
+                MUL_XYZ(g, 3, 4, 5);
+                MUL_XYZ(b, 6, 7, 8);
+                #undef MUL_XYZ
 
                 v_int16x8 r_vec0s, r_vec1s, g_vec0s, g_vec1s, b_vec0s, b_vec1s;
 
@@ -3510,33 +3506,34 @@ struct Lab2RGB_b
 
                 //limit indices in table
                 v_int16x8 tabsz = v_setall_s16((int)INV_GAMMA_TAB_SIZE-1);
-                r_vec0s = v_max(v_setzero_s16(), v_min(r_vec0s, tabsz));
-                r_vec1s = v_max(v_setzero_s16(), v_min(r_vec1s, tabsz));
-                g_vec0s = v_max(v_setzero_s16(), v_min(g_vec0s, tabsz));
-                g_vec1s = v_max(v_setzero_s16(), v_min(g_vec1s, tabsz));
-                b_vec0s = v_max(v_setzero_s16(), v_min(b_vec0s, tabsz));
-                b_vec1s = v_max(v_setzero_s16(), v_min(b_vec1s, tabsz));
+                #define CLAMP(r) (r) = v_max(v_setzero_s16(), v_min((r), tabsz))
+                CLAMP(r_vec0s); CLAMP(r_vec1s);
+                CLAMP(g_vec0s); CLAMP(g_vec1s);
+                CLAMP(b_vec0s); CLAMP(b_vec1s);
+                #undef CLAMP
 
                 v_uint16x8 r_vec0(r_vec0s.val), r_vec1(r_vec1s.val);
                 v_uint16x8 g_vec0(g_vec0s.val), g_vec1(g_vec1s.val);
                 v_uint16x8 b_vec0(b_vec0s.val), b_vec1(b_vec1s.val);
 
                 //ro = tab[ro]; go = tab[go]; bo = tab[bo];
-#define GAMMA_TAB_SUBST(reg) \
-                (reg) = v_uint16x8(tab[(reg).get0()],\
-                                   tab[v_extract<1>((reg), (reg)).get0()],\
-                                   tab[v_extract<2>((reg), (reg)).get0()],\
-                                   tab[v_extract<3>((reg), (reg)).get0()],\
-                                   tab[v_extract<4>((reg), (reg)).get0()],\
-                                   tab[v_extract<5>((reg), (reg)).get0()],\
-                                   tab[v_extract<6>((reg), (reg)).get0()],\
-                                   tab[v_extract<7>((reg), (reg)).get0()])
+                uint16_t CV_DECL_ALIGNED(16) shifts[8];
+                #define GAMMA_TAB_SUBST(reg) \
+                v_store_aligned(shifts, (reg));\
+                (reg) = v_uint16x8(tab[shifts[0]],\
+                                   tab[shifts[1]],\
+                                   tab[shifts[2]],\
+                                   tab[shifts[3]],\
+                                   tab[shifts[4]],\
+                                   tab[shifts[5]],\
+                                   tab[shifts[6]],\
+                                   tab[shifts[7]])
 
                 GAMMA_TAB_SUBST(r_vec0); GAMMA_TAB_SUBST(r_vec1);
                 GAMMA_TAB_SUBST(g_vec0); GAMMA_TAB_SUBST(g_vec1);
                 GAMMA_TAB_SUBST(b_vec0); GAMMA_TAB_SUBST(b_vec1);
 
-#undef GAMMA_TAB_SUBST
+                #undef GAMMA_TAB_SUBST
 
                 v_uint8x16 u8_b = v_pack(b_vec0, b_vec1);
                 v_uint8x16 u8_g = v_pack(g_vec0, g_vec1);
