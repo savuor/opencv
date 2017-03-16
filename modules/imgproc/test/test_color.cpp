@@ -2385,7 +2385,8 @@ static ushort sRGBInvGammaTab_b[INV_GAMMA_TAB_SIZE], linearInvGammaTab_b[INV_GAM
 static ushort LabCbrtTab_b[LAB_CBRT_TAB_SIZE_B];
 
 static bool enableTetraInterpolation = true;
-static bool enablePacked = true;
+//TODO: return it back
+static bool enablePacked = false;
 enum
 {
     lab_lut_shift = 5,
@@ -2546,7 +2547,7 @@ static void initLabTabs()
 
                         //Lab(full range) => XYZ: x: [-0.0328753, 1.98139] y: [0, 1] z: [-0.0821883, 4.41094]
                         writeToLUT(p, q, r, Lab2XYZprev,
-                                   cvRound(LAB_BASE*(x+0.125f)/2.5f),
+                                   cvRound(LAB_BASE*(x+0.04f)/2.03125f),
                                    cvRound(LAB_BASE*y),
                                    cvRound(LAB_BASE*(z+0.125f)/4.5f));
 
@@ -3168,6 +3169,7 @@ struct Lab2RGB_f
             go = clip(go);
             bo = clip(bo);
 
+            //TODO: return it back
             if (gammaTab)
             {
                 ro = splineInterpolate(ro * gscale, gammaTab, GAMMA_TAB_SIZE);
@@ -3566,7 +3568,64 @@ struct Lab2RGB_b
                 int ro, go, bo;
                 trilinearInterpolate(L, a, b, Lab2XYZLUT_s16, ro, go, bo);
                 //Lab(full range) => XYZ: x: [-0.0328753, 1.98139] y: [0, 1] z: [-0.0821883, 4.41094]
-                int x = (ro*20-LAB_BASE)/8, y = go, z = (bo*36-LAB_BASE)/8;
+                int x = 2*ro + ro/32 - LAB_BASE/25, y = go, z = (bo*36-LAB_BASE)/8;
+
+                //TODO: remove it
+                static const float lThresh = 0.008856f * 903.3f;
+                static const float fThresh = 7.787f * 0.008856f + 16.0f / 116.0f;
+                L = src[i + 0]*LAB_BASE/255;
+                a = (src[i + 1] - 128)*LAB_BASE/256;
+                b = (src[i + 2] - 128)*LAB_BASE/256;
+
+                // L = li*lab_base/100
+                // li = L*100/LAB_BASE
+                // (a, b)   = (ai, bi)*LAB_BASE/256;
+                // (ai, bi) = ( a,  b)*256/LAB_BASE;
+                // ify = fy*LAB_BASE;
+                int ify;
+                if(L <= lThresh*LAB_BASE/100)
+                {
+                    //y = yy * LAB_BASE;
+                    y = L*100/903.3f;
+                    //ify = fy*LAB_BASE;
+                    ify = 7.787f * y + 16*LAB_BASE/116;
+                }
+                else
+                {
+                    ify = L*100/116 + 16*LAB_BASE/116;
+                    // y = yy*LAB_BASE;
+                    y = ify*ify/LAB_BASE*ify/LAB_BASE;
+                }
+                //ifxz[i] = fxz[i]*LAB_BASE;
+                int ifxz[] = {ify + a*256/500, ify - b*256/200};
+                for(int k = 0; k < 2; k++)
+                    if(ifxz[k] <= fThresh*LAB_BASE)
+                        ifxz[k] = ifxz[k]/7.787f - LAB_BASE*16/116/7.787f;
+                    else
+                        ifxz[k] = ifxz[k]*ifxz[k]/LAB_BASE*ifxz[k]/LAB_BASE;
+                x = ifxz[0]; z = ifxz[1];
+
+                // L = src*lab_base/255, li = src*100/255;
+//                float li, ai, bi;
+//                float yy, fy;
+//                if (li <= lThresh)
+//                {
+//                    yy = li / 903.3f;
+//                    fy = 7.787f * yy + 16.0f / 116.0f;
+//                }
+//                else
+//                {
+//                    fy = (li + 16.0f) / 116.0f;
+//                    yy = fy * fy * fy;
+//                }
+//                float fxz[] = { ai / 500.0f + fy, fy - bi / 200.0f };
+//                for (int k = 0; k < 2; k++)
+//                    if (fxz[k] <= fThresh)
+//                        fxz[k] = (fxz[k] - 16.0f / 116.0f) / 7.787f;
+//                    else
+//                        fxz[k] = fxz[k] * fxz[k] * fxz[k];
+//                x = fxz[0]*LAB_BASE; y = yy*LAB_BASE; z = fxz[1]*LAB_BASE;
+                //up to here
 
                 const int shift = lab_shift+(lab_base_shift-inv_gamma_shift);
                 ro = CV_DESCALE(C0 * x + C1 * y + C2 * z, shift);
@@ -3576,6 +3635,20 @@ struct Lab2RGB_b
                 ro = max(0, min((int)INV_GAMMA_TAB_SIZE-1, ro));
                 go = max(0, min((int)INV_GAMMA_TAB_SIZE-1, go));
                 bo = max(0, min((int)INV_GAMMA_TAB_SIZE-1, bo));
+
+                //TODO: Return it back
+                /*
+                ro = ro*255/INV_GAMMA_TAB_SIZE;
+                go = go*255/INV_GAMMA_TAB_SIZE;
+                bo = bo*255/INV_GAMMA_TAB_SIZE;
+                *//*
+                float rr = splineInterpolate(ro*1.0f/(1 << inv_gamma_shift)*(float)GAMMA_TAB_SIZE, sRGBInvGammaTab, GAMMA_TAB_SIZE);
+                float gg = splineInterpolate(go*1.0f/(1 << inv_gamma_shift)*(float)GAMMA_TAB_SIZE, sRGBInvGammaTab, GAMMA_TAB_SIZE);
+                float bb = splineInterpolate(bo*1.0f/(1 << inv_gamma_shift)*(float)GAMMA_TAB_SIZE, sRGBInvGammaTab, GAMMA_TAB_SIZE);
+                ro = saturate_cast<uchar>(rr*255.0f);
+                go = saturate_cast<uchar>(gg*255.0f);
+                bo = saturate_cast<uchar>(bb*255.0f);
+                */
 
                 ro = tab[ro];
                 go = tab[go];
