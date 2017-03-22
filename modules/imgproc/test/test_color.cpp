@@ -2408,6 +2408,36 @@ static inline void div255(v_uint16x8& reg)
     reg = (reg << (lab_base_shift - 8)) + (reg >> 2);
 }
 
+template<int w, long long int d>
+static inline long long int divConst(long long int v)
+{
+    int bits = 0; int dd = d;
+    while(dd > 0)
+    {
+        dd = dd >> 1; bits++;
+    }
+    int b = bits - 1;
+    long long int r = w + b;
+    long long int pmod = (1l << r)%d;
+    long long int f = (1l << r)/d;
+    if(pmod)
+    {
+        if(pmod*2 > d)
+        {
+            v = (v * (f + 1) + (1l << (r - 1))) >> r;
+        }
+        else
+        {
+            v = ((v + 1) * f + (1l << (r - 1))) >> r;
+        }
+    }
+    else
+    {
+        v = (v + (1l << (r - 1))) >> r;
+    }
+    return v;
+}
+
 #define clip(value) \
     value < 0.0f ? 0.0f : value > 1.0f ? 1.0f : value;
 
@@ -3560,72 +3590,107 @@ struct Lab2RGB_b
 
             for (; i < n*3; i += 3, dst += dcn)
             {
-                int L = src[i + 0]*LAB_BASE/255;
-                int a = src[i + 1]*LAB_BASE/256;
-                int b = src[i + 2]*LAB_BASE/256;
+                int ro, go, bo, x, y, z;
+                static const int BASE = (1 << 14);
+                static const int lThresh = 0.008856f * 903.3f * (long long int)BASE/100;
+                static const int fThresh = (7.787f * 0.008856f + 16.0f / 116.0f)*BASE;
+                int L = src[i + 0]*BASE/255;
+                int a = (src[i + 1] - 128)*BASE/256;
+                int b = (src[i + 2] - 128)*BASE/256;
 
-                //use XYZ table when doing Lab2RGB conversion
-                int ro, go, bo;
-                trilinearInterpolate(L, a, b, Lab2XYZLUT_s16, ro, go, bo);
-                //Lab(full range) => XYZ: x: [-0.0328753, 1.98139] y: [0, 1] z: [-0.0821883, 4.41094]
-                int x = 2*ro + ro/32 - LAB_BASE/25, y = go, z = (bo*36-LAB_BASE)/8;
-
-                //TODO: remove it
-                static const float lThresh = 0.008856f * 903.3f;
-                static const float fThresh = 7.787f * 0.008856f + 16.0f / 116.0f;
-                L = src[i + 0]*LAB_BASE/255;
-                a = (src[i + 1] - 128)*LAB_BASE/256;
-                b = (src[i + 2] - 128)*LAB_BASE/256;
-
-                // L = li*lab_base/100
-                // li = L*100/LAB_BASE
-                // (a, b)   = (ai, bi)*LAB_BASE/256;
-                // (ai, bi) = ( a,  b)*256/LAB_BASE;
-                // ify = fy*LAB_BASE;
                 int ify;
-                if(L <= lThresh*LAB_BASE/100)
+                const int base16_116 = BASE*16/116 + 1;
+                if(L <= lThresh)
                 {
-                    //y = yy * LAB_BASE;
-                    y = L*100/903.3f;
-                    //ify = fy*LAB_BASE;
-                    ify = 7.787f * y + 16*LAB_BASE/116;
+                    //yy = li / 903.3f;
+                    //y = L*100/903.3f;
+
+                    y = ((long long int)L*1000*14859) >> 27;
+                    int y2 = divConst<14, 9033>((long long int)L*1000);
+                    if(y != y2)
+                    {
+                        //cout << endl;
+                    }
+                    y2 = divConst<14, 9033>((long long int)L*1000);
+                    y = y2;
+
+                    //fy = 7.787f * yy + 16.0f / 116.0f;
+                    //ify = y*7.787f + base16_116;
+
+                    ify = base16_116 + y*8;
+                    int d = ((long long int)y*213)/1000;
+                    int d2 = divConst<14, 1000>((long long int)y*213);
+                    if(d != d2)
+                    {
+                        //cout << endl;
+                    }
+                    ify = ify - d2;
                 }
                 else
                 {
-                    ify = L*100/116 + 16*LAB_BASE/116;
-                    // y = yy*LAB_BASE;
-                    y = ify*ify/LAB_BASE*ify/LAB_BASE;
-                }
-                //ifxz[i] = fxz[i]*LAB_BASE;
-                int ifxz[] = {ify + a*256/500, ify - b*256/200};
-                for(int k = 0; k < 2; k++)
-                    if(ifxz[k] <= fThresh*LAB_BASE)
-                        ifxz[k] = ifxz[k]/7.787f - LAB_BASE*16/116/7.787f;
-                    else
-                        ifxz[k] = ifxz[k]*ifxz[k]/LAB_BASE*ifxz[k]/LAB_BASE;
-                x = ifxz[0]; z = ifxz[1];
+                    //fy = (li + 16.0f) / 116.0f;
+                    //ify = L*100/116 + base16_116;
 
-                // L = src*lab_base/255, li = src*100/255;
-//                float li, ai, bi;
-//                float yy, fy;
-//                if (li <= lThresh)
-//                {
-//                    yy = li / 903.3f;
-//                    fy = 7.787f * yy + 16.0f / 116.0f;
-//                }
-//                else
-//                {
-//                    fy = (li + 16.0f) / 116.0f;
-//                    yy = fy * fy * fy;
-//                }
-//                float fxz[] = { ai / 500.0f + fy, fy - bi / 200.0f };
-//                for (int k = 0; k < 2; k++)
-//                    if (fxz[k] <= fThresh)
-//                        fxz[k] = (fxz[k] - 16.0f / 116.0f) / 7.787f;
-//                    else
-//                        fxz[k] = fxz[k] * fxz[k] * fxz[k];
-//                x = fxz[0]*LAB_BASE; y = yy*LAB_BASE; z = fxz[1]*LAB_BASE;
-                //up to here
+                    int toDiv = L*100;
+                    ify = toDiv/116;
+                    int ify2 = divConst<20, 116>((long long int)toDiv);
+                    if(ify != ify2)
+                    {
+                        //cout << endl;
+                    }
+                    ify = divConst<20, 116>((long long int)toDiv); //20 is ok, 19 is not ok
+                    ify += base16_116;
+
+                    //yy = fy * fy * fy;
+                    long long int m = (long long int)ify*ify/BASE*ify/BASE;
+                    y = (int)m;
+                }
+
+                //float fxz[] = { ai / 500.0f + fy, fy - bi / 200.0f };
+                int adiv, bdiv;
+                //adiv = a*256/500, bdiv = b*256/200;
+
+                adiv = (long long int)a*256/500;
+                const int bits = 24; // 24 is not ok, but gives max 2 err
+                int adiv2 = divConst<bits, 500>((long long int)a*256);
+                if(adiv != adiv2)
+                {
+                    //cout << endl;
+                }
+                adiv2 = divConst<bits, 500>((long long int)a*256);
+                adiv = adiv2;
+
+                bdiv = (long long int)b*256/200;
+                int bdiv2 = divConst<bits, 200>((long long int)b*256);
+                if(bdiv != bdiv2)
+                {
+                    //cout << endl;
+                }
+                bdiv2 = divConst<bits, 200>((long long int)b*256);
+                bdiv = bdiv2;
+
+                int ifxz[] = {ify + adiv, ify - bdiv};
+                for(int k = 0; k < 2; k++)
+                {
+                    int& v = ifxz[k];
+                    if(v <= fThresh)
+                    {
+                        //fxz[k] = (fxz[k] - 16.0f / 116.0f) / 7.787f;
+                        //v = v*1000/7787;
+
+                        v = divConst<14, 7787>((long long int)v*1000);
+
+                        const long long int sub = (long long int)BASE*16/116*1000/7787;
+                        v = v - (int)(sub);
+                    }
+                    else
+                    {
+                        //fxz[k] = fxz[k] * fxz[k] * fxz[k];
+                        long long int m = (long long int)v*v/BASE*v/BASE;
+                        v = (int)m;
+                    }
+                }
+                x = ifxz[0]/(BASE/LAB_BASE); y = y/(BASE/LAB_BASE); z = ifxz[1]/(BASE/LAB_BASE);
 
                 const int shift = lab_shift+(lab_base_shift-inv_gamma_shift);
                 ro = CV_DESCALE(C0 * x + C1 * y + C2 * z, shift);
@@ -3635,20 +3700,6 @@ struct Lab2RGB_b
                 ro = max(0, min((int)INV_GAMMA_TAB_SIZE-1, ro));
                 go = max(0, min((int)INV_GAMMA_TAB_SIZE-1, go));
                 bo = max(0, min((int)INV_GAMMA_TAB_SIZE-1, bo));
-
-                //TODO: Return it back
-                /*
-                ro = ro*255/INV_GAMMA_TAB_SIZE;
-                go = go*255/INV_GAMMA_TAB_SIZE;
-                bo = bo*255/INV_GAMMA_TAB_SIZE;
-                *//*
-                float rr = splineInterpolate(ro*1.0f/(1 << inv_gamma_shift)*(float)GAMMA_TAB_SIZE, sRGBInvGammaTab, GAMMA_TAB_SIZE);
-                float gg = splineInterpolate(go*1.0f/(1 << inv_gamma_shift)*(float)GAMMA_TAB_SIZE, sRGBInvGammaTab, GAMMA_TAB_SIZE);
-                float bb = splineInterpolate(bo*1.0f/(1 << inv_gamma_shift)*(float)GAMMA_TAB_SIZE, sRGBInvGammaTab, GAMMA_TAB_SIZE);
-                ro = saturate_cast<uchar>(rr*255.0f);
-                go = saturate_cast<uchar>(gg*255.0f);
-                bo = saturate_cast<uchar>(bb*255.0f);
-                */
 
                 ro = tab[ro];
                 go = tab[go];
