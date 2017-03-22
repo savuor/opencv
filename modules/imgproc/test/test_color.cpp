@@ -3600,97 +3600,97 @@ struct Lab2RGB_b
 
                 int ify;
                 const int base16_116 = BASE*16/116 + 1;
-                if(L <= lThresh)
+                //const bool natDiv = true;
+                int x1, y1, z1, x2, y2, z2;
+                //if(natDiv)
                 {
-                    //yy = li / 903.3f;
-                    //y = L*100/903.3f;
-
-                    y = ((long long int)L*1000*14859) >> 27;
-                    int y2 = divConst<14, 9033>((long long int)L*1000);
-                    if(y != y2)
+                    if(L <= lThresh)
                     {
-                        //cout << endl;
-                    }
-                    y2 = divConst<14, 9033>((long long int)L*1000);
-                    y = y2;
+                        //yy = li / 903.3f;
+                        //y = L*100/903.3f;
+                        y = divConst<14, 9033>((long long int)L*1000);
 
-                    //fy = 7.787f * yy + 16.0f / 116.0f;
-                    //ify = y*7.787f + base16_116;
-
-                    ify = base16_116 + y*8;
-                    int d = ((long long int)y*213)/1000;
-                    int d2 = divConst<14, 1000>((long long int)y*213);
-                    if(d != d2)
-                    {
-                        //cout << endl;
-                    }
-                    ify = ify - d2;
-                }
-                else
-                {
-                    //fy = (li + 16.0f) / 116.0f;
-                    //ify = L*100/116 + base16_116;
-
-                    int toDiv = L*100;
-                    ify = toDiv/116;
-                    int ify2 = divConst<20, 116>((long long int)toDiv);
-                    if(ify != ify2)
-                    {
-                        //cout << endl;
-                    }
-                    ify = divConst<20, 116>((long long int)toDiv); //20 is ok, 19 is not ok
-                    ify += base16_116;
-
-                    //yy = fy * fy * fy;
-                    long long int m = (long long int)ify*ify/BASE*ify/BASE;
-                    y = (int)m;
-                }
-
-                //float fxz[] = { ai / 500.0f + fy, fy - bi / 200.0f };
-                int adiv, bdiv;
-                //adiv = a*256/500, bdiv = b*256/200;
-
-                adiv = (long long int)a*256/500;
-                const int bits = 24; // 24 is not ok, but gives max 2 err
-                int adiv2 = divConst<bits, 500>((long long int)a*256);
-                if(adiv != adiv2)
-                {
-                    //cout << endl;
-                }
-                adiv2 = divConst<bits, 500>((long long int)a*256);
-                adiv = adiv2;
-
-                bdiv = (long long int)b*256/200;
-                int bdiv2 = divConst<bits, 200>((long long int)b*256);
-                if(bdiv != bdiv2)
-                {
-                    //cout << endl;
-                }
-                bdiv2 = divConst<bits, 200>((long long int)b*256);
-                bdiv = bdiv2;
-
-                int ifxz[] = {ify + adiv, ify - bdiv};
-                for(int k = 0; k < 2; k++)
-                {
-                    int& v = ifxz[k];
-                    if(v <= fThresh)
-                    {
-                        //fxz[k] = (fxz[k] - 16.0f / 116.0f) / 7.787f;
-                        //v = v*1000/7787;
-
-                        v = divConst<14, 7787>((long long int)v*1000);
-
-                        const long long int sub = (long long int)BASE*16/116*1000/7787;
-                        v = v - (int)(sub);
+                        //fy = 7.787f * yy + 16.0f / 116.0f;
+                        ify = base16_116 + y*8 - y*213/1000;
                     }
                     else
                     {
-                        //fxz[k] = fxz[k] * fxz[k] * fxz[k];
-                        long long int m = (long long int)v*v/BASE*v/BASE;
-                        v = (int)m;
+                        //fy = (li + 16.0f) / 116.0f;
+                        ify = L*100/116 + base16_116;
+
+                        //yy = fy * fy * fy;
+                        y = ify*ify/BASE*ify/BASE;
                     }
+
+                    //float fxz[] = { ai / 500.0f + fy, fy - bi / 200.0f };
+                    int adiv, bdiv;
+                    //adiv = a*256/500, bdiv = b*256/200;
+                    const int bits = 24;
+                    adiv = divConst<bits, 500>((long long int)a*256);
+                    bdiv = divConst<bits, 200>((long long int)b*256);
+
+                    int ifxz[] = {ify + adiv, ify - bdiv};
+                    for(int k = 0; k < 2; k++)
+                    {
+                        int& v = ifxz[k];
+                        if(v <= fThresh)
+                        {
+                            //fxz[k] = (fxz[k] - 16.0f / 116.0f) / 7.787f;
+                            v = v*1000/7787 - BASE*16/116*1000/7787;
+                        }
+                        else
+                        {
+                            //fxz[k] = fxz[k] * fxz[k] * fxz[k];
+                            v = v*v/BASE*v/BASE;
+                        }
+                    }
+                    x1 = ifxz[0]/(BASE/LAB_BASE); y1 = y/(BASE/LAB_BASE); z1 = ifxz[1]/(BASE/LAB_BASE);
                 }
-                x = ifxz[0]/(BASE/LAB_BASE); y = y/(BASE/LAB_BASE); z = ifxz[1]/(BASE/LAB_BASE);
+                //else
+                {
+                    if(L <= lThresh)
+                    {
+                        //yy = li / 903.3f;
+                        //y = L*100/903.3f;
+
+                        y = divConst<14, 9033>((long long int)L*1000);
+
+                        //fy = 7.787f * yy + 16.0f / 116.0f;
+                        ify = base16_116 + y*8 - divConst<14, 1000>((long long int)y*213);
+                    }
+                    else
+                    {
+                        //fy = (li + 16.0f) / 116.0f;
+                        ify = divConst<20, 116>((long long int)L*100) + base16_116;
+
+                        //yy = fy * fy * fy;
+                        y = ify*ify/BASE*ify/BASE;
+                    }
+
+                    //float fxz[] = { ai / 500.0f + fy, fy - bi / 200.0f };
+                    int adiv, bdiv;
+                    const int bits = 24;
+                    adiv = divConst<bits, 500>((long long int)a*256);
+                    bdiv = divConst<bits, 200>((long long int)b*256);
+
+                    int ifxz[] = {ify + adiv, ify - bdiv};
+                    for(int k = 0; k < 2; k++)
+                    {
+                        int& v = ifxz[k];
+                        if(v <= fThresh)
+                        {
+                            //fxz[k] = (fxz[k] - 16.0f / 116.0f) / 7.787f;
+                            v = divConst<14, 7787>((long long int)v*1000) - BASE*16/116*1000/7787;
+                        }
+                        else
+                        {
+                            //fxz[k] = fxz[k] * fxz[k] * fxz[k];
+                            v = v*v/BASE*v/BASE;
+                        }
+                    }
+                    x2 = ifxz[0]/(BASE/LAB_BASE); y2 = y/(BASE/LAB_BASE); z2 = ifxz[1]/(BASE/LAB_BASE);
+                }
+                x = x1, y = y1, z = z1;
 
                 const int shift = lab_shift+(lab_base_shift-inv_gamma_shift);
                 ro = CV_DESCALE(C0 * x + C1 * y + C2 * z, shift);
