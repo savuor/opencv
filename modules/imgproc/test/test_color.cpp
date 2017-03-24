@@ -3557,13 +3557,14 @@ struct Lab2RGB_b
                 v_expand(savec0, avec00, avec01); v_expand(savec1, avec10, avec11);
                 v_expand(sbvec0, bvec00, bvec01); v_expand(sbvec1, bvec10, bvec11);
 
+                #define REPEAT4(macro) macro(00); macro(01); macro(10); macro(11)
+
                 /*
                 L = L*BASE/255; // == divConst<14, 255>(L*BASE)
                 */
-                lvec00 = divConst<14, 255>(lvec00 << base_shift);
-                lvec01 = divConst<14, 255>(lvec01 << base_shift);
-                lvec10 = divConst<14, 255>(lvec10 << base_shift);
-                lvec11 = divConst<14, 255>(lvec11 << base_shift);
+                #define LBASE(nn) lvec##nn = divConst<14, 255>(lvec##nn << base_shift)
+                REPEAT4(LBASE);
+                #undef LBASE
 
                 /*
                 a = (a - 128)*BASE/256; b = (a - 128)*BASE/256;
@@ -3584,8 +3585,6 @@ struct Lab2RGB_b
 
                 v_int32x4 ify_00lt, ify_01lt, ify_10lt, ify_11lt;
                 v_int32x4 ify_00gt, ify_01gt, ify_10gt, ify_11gt;
-
-                #define REPEAT4(macro) macro(00); macro(01); macro(10); macro(11)
 
                 v_int32x4 dwbase16_116 = v_setall_s32(base16_116);
                 // Less-than part
@@ -3611,18 +3610,16 @@ struct Lab2RGB_b
                 ify = divConst<20, 116>(L*100) + base16_116;
                 */
                 v_int32x4 mul100 = v_setall_s32(100);
-                ify_00gt = divConst<20, 116>(lvec00*mul100) + dwbase16_116;
-                ify_01gt = divConst<20, 116>(lvec01*mul100) + dwbase16_116;
-                ify_10gt = divConst<20, 116>(lvec10*mul100) + dwbase16_116;
-                ify_11gt = divConst<20, 116>(lvec11*mul100) + dwbase16_116;
+                #define IFY_L(nn) ify_##nn##gt = divConst<20, 116>(lvec##nn*mul100) + dwbase16_116
+                REPEAT4(IFY_L);
+                #undef IFY_L
 
                 /*
                 y = ify*ify/BASE*ify/BASE;
                 */
-                y_00gt = (((ify_00gt*ify_00gt) >> base_shift)*ify_00gt) >> base_shift;
-                y_01gt = (((ify_01gt*ify_01gt) >> base_shift)*ify_01gt) >> base_shift;
-                y_10gt = (((ify_10gt*ify_10gt) >> base_shift)*ify_10gt) >> base_shift;
-                y_11gt = (((ify_11gt*ify_11gt) >> base_shift)*ify_11gt) >> base_shift;
+                #define YCUBE(nn) y_##nn##gt = (((ify_##nn##gt*ify_##nn##gt) >> base_shift)*ify_##nn##gt) >> base_shift
+                REPEAT4(YCUBE);
+                #undef YCUBE
 
                 // Combining LT and GT parts
                 /*
@@ -3630,18 +3627,15 @@ struct Lab2RGB_b
                 */
                 v_int32x4 dwlThresh = v_setall_s32(lThresh);
                 v_int32x4 mask00, mask01, mask10, mask11;
-                mask00 = lvec00 <= dwlThresh;
-                mask01 = lvec01 <= dwlThresh;
-                mask10 = lvec10 <= dwlThresh;
-                mask11 = lvec11 <= dwlThresh;
-                y_00 = v_select(mask00, y_00lt, y_00gt);
-                y_01 = v_select(mask01, y_01lt, y_01gt);
-                y_10 = v_select(mask10, y_10lt, y_10gt);
-                y_11 = v_select(mask11, y_11lt, y_11gt);
-                ify_00 = v_select(mask00, ify_00lt, ify_00gt);
-                ify_01 = v_select(mask01, ify_01lt, ify_01gt);
-                ify_10 = v_select(mask10, ify_10lt, ify_10gt);
-                ify_11 = v_select(mask11, ify_11lt, ify_11gt);
+                #define MASKL(nn) mask##nn = lvec##nn <= dwlThresh
+                REPEAT4(MASKL);
+                #undef MASKL
+                #define MASKY(nn) y_##nn = v_select(mask##nn, y_##nn##lt, y_##nn##gt)
+                REPEAT4(MASKY);
+                #undef MASKY
+                #define MASKIFY(nn) ify_##nn = v_select(mask##nn, ify_##nn##lt, ify_##nn##gt)
+                REPEAT4(MASKIFY);
+                #undef MASKIFY
 
                 /*
                 adiv = divConst<24, 500>(a*256);
@@ -3650,27 +3644,22 @@ struct Lab2RGB_b
                 */
                 v_int32x4 adiv_00, adiv_01, adiv_10, adiv_11;
                 v_int32x4 bdiv_00, bdiv_01, bdiv_10, bdiv_11;
-                adiv_00 = divConst<24, 500>(avec00 << 8);
-                adiv_01 = divConst<24, 500>(avec01 << 8);
-                adiv_10 = divConst<24, 500>(avec10 << 8);
-                adiv_11 = divConst<24, 500>(avec11 << 8);
+                #define ADIV(nn) adiv_##nn = divConst<24, 500>(avec##nn << 8)
+                #define BDIV(nn) bdiv_##nn = divConst<24, 200>(bvec##nn << 8)
+                REPEAT4(ADIV);
+                REPEAT4(BDIV);
+                #undef ADIV
+                #undef BDIV
 
-                bdiv_00 = divConst<24, 200>(bvec00 << 8);
-                bdiv_01 = divConst<24, 200>(bvec01 << 8);
-                bdiv_10 = divConst<24, 200>(bvec10 << 8);
-                bdiv_11 = divConst<24, 200>(bvec11 << 8);
-
-                v_int32x4 ifxz0_00, ifxz0_01, ifxz0_10, ifxz0_11;
-                v_int32x4 ifxz1_00, ifxz1_01, ifxz1_10, ifxz1_11;
-                ifxz0_00 = ify_00 + adiv_00;
-                ifxz0_01 = ify_01 + adiv_01;
-                ifxz0_10 = ify_10 + adiv_10;
-                ifxz0_11 = ify_11 + adiv_11;
-
-                ifxz1_00 = ify_00 - bdiv_00;
-                ifxz1_01 = ify_01 - bdiv_01;
-                ifxz1_10 = ify_10 - bdiv_10;
-                ifxz1_11 = ify_11 - bdiv_11;
+                /*
+                x = ifxz[0]; y = y; z = ifxz[1];
+                */
+                #define IFXZ0(nn) x_##nn = ify_##nn + adiv_##nn
+                #define IFXZ1(nn) z_##nn = ify_##nn - bdiv_##nn
+                REPEAT4(IFXZ0);
+                REPEAT4(IFXZ1);
+                #undef IFXZ0
+                #undef IFXZ1
 
                 v_int32x4 dwsub = v_setall_s32(BASE*16/116*1000/7787);
                 v_int32x4 dwfThresh = v_setall_s32(fThresh);
@@ -3681,82 +3670,62 @@ struct Lab2RGB_b
                 /*
                 v = (v <= fThresh) ? ... : ... ;
                 */
-                mask00 = ifxz0_00 <= dwfThresh;
-                mask01 = ifxz0_01 <= dwfThresh;
-                mask10 = ifxz0_10 <= dwfThresh;
-                mask11 = ifxz0_11 <= dwfThresh;
+                #define MASKZ(nn) mask##nn = x_##nn <= dwfThresh
+                REPEAT4(MASKZ);
+                #undef MASKZ
 
                 // Less-than part
                 /*
                 v = divConst<14, 7787>(v*1000) - BASE*16/116*1000/7787;
                 */
-                v_00lt = divConst<14, 7787>(ifxz0_00*mul1000) - dwsub;
-                v_01lt = divConst<14, 7787>(ifxz0_01*mul1000) - dwsub;
-                v_10lt = divConst<14, 7787>(ifxz0_10*mul1000) - dwsub;
-                v_11lt = divConst<14, 7787>(ifxz0_11*mul1000) - dwsub;
+                #define LTP(nn) v_##nn##lt = divConst<14, 7787>(x_##nn*mul1000) - dwsub
+                REPEAT4(LTP);
+                #undef LTP
 
                 // Greater-than part
                 /*
                 v = v*v/BASE*v/BASE;
                 */
-                v_00gt = (((ifxz0_00*ifxz0_00) >> base_shift) * ifxz0_00) >> base_shift;
-                v_01gt = (((ifxz0_01*ifxz0_01) >> base_shift) * ifxz0_01) >> base_shift;
-                v_10gt = (((ifxz0_10*ifxz0_10) >> base_shift) * ifxz0_10) >> base_shift;
-                v_11gt = (((ifxz0_11*ifxz0_11) >> base_shift) * ifxz0_11) >> base_shift;
+                #define GTP(nn) v_##nn##gt = (((x_##nn*x_##nn) >> base_shift) * x_##nn) >> base_shift
+                REPEAT4(GTP);
+                #undef GTP
 
                 // Combining LT ang GT parts
-                ifxz0_00 = v_select(mask00, v_00lt, v_00gt);
-                ifxz0_01 = v_select(mask00, v_01lt, v_01gt);
-                ifxz0_10 = v_select(mask00, v_10lt, v_10gt);
-                ifxz0_11 = v_select(mask00, v_11lt, v_11gt);
+                #define MASKXZ(nn) x_##nn = v_select(mask##nn, v_##nn##lt, v_##nn##gt)
+                REPEAT4(MASKXZ);
+                #undef MASKXZ
 
                 // k = 1
                 /*
                 v = (v <= fThresh) ? ... : ... ;
                 */
-                mask00 = ifxz1_00 <= dwfThresh;
-                mask01 = ifxz1_01 <= dwfThresh;
-                mask10 = ifxz1_10 <= dwfThresh;
-                mask11 = ifxz1_11 <= dwfThresh;
+                #define MASKZ(nn) mask##nn = z_##nn <= dwfThresh
+                REPEAT4(MASKZ);
+                #undef MASKZ
 
                 // Less-than part
                 /*
                 v = divConst<14, 7787>(v*1000) - BASE*16/116*1000/7787;
                 */
-                v_00lt = divConst<14, 7787>(ifxz1_00*mul1000) - dwsub;
-                v_01lt = divConst<14, 7787>(ifxz1_01*mul1000) - dwsub;
-                v_10lt = divConst<14, 7787>(ifxz1_10*mul1000) - dwsub;
-                v_11lt = divConst<14, 7787>(ifxz1_11*mul1000) - dwsub;
+                #define LTP(nn) v_##nn##lt = divConst<14, 7787>(z_##nn*mul1000) - dwsub
+                REPEAT4(LTP);
+                #undef LTP
 
                 // Greater-than part
                 /*
                 v = v*v/BASE*v/BASE;
                 */
-                v_00gt = (((ifxz1_00*ifxz1_00) >> base_shift) * ifxz1_00) >> base_shift;
-                v_01gt = (((ifxz1_01*ifxz1_01) >> base_shift) * ifxz1_01) >> base_shift;
-                v_10gt = (((ifxz1_10*ifxz1_10) >> base_shift) * ifxz1_10) >> base_shift;
-                v_11gt = (((ifxz1_11*ifxz1_11) >> base_shift) * ifxz1_11) >> base_shift;
+                #define GTP(nn) v_##nn##gt = (((z_##nn*z_##nn) >> base_shift) * z_##nn) >> base_shift
+                REPEAT4(GTP);
+                #undef GTP
 
                 // Combining LT ang GT parts
-                ifxz1_00 = v_select(mask00, v_00lt, v_00gt);
-                ifxz1_01 = v_select(mask00, v_01lt, v_01gt);
-                ifxz1_10 = v_select(mask00, v_10lt, v_10gt);
-                ifxz1_11 = v_select(mask00, v_11lt, v_11gt);
+                #define MASKXZ(nn) z_##nn = v_select(mask##nn, v_##nn##lt, v_##nn##gt)
+                REPEAT4(MASKXZ);
+                #undef MASKXZ
 
-                //TODO: remove extra registers
-                /*
-                x = ifxz[0]; y = y; z = ifxz[1];
-                */
-                x_00 = ifxz0_00;
-                x_01 = ifxz0_01;
-                x_10 = ifxz0_10;
-                x_11 = ifxz0_11;
-                z_00 = ifxz1_00;
-                z_01 = ifxz1_01;
-                z_10 = ifxz1_10;
-                z_11 = ifxz1_11;
+                #undef REPEAT4
 
-#undef REPEAT4
                 const int shift = lab_shift+(base_shift-inv_gamma_shift);
                 /*
                     ro = CV_DESCALE(C0 * x + C1 * y + C2 * z, shift);
