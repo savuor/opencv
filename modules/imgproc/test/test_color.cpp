@@ -3145,7 +3145,7 @@ struct Lab2RGB_f
 
                 float ro, go, bo;
                 //Lab(full range) => XYZ: x: [-0.0328753, 1.98139] y: [0, 1] z: [-0.0821883, 4.41094]
-                float x = (iX*1.0f/LAB_BASE)*2.5f-0.125f, y = (iY*1.0f/LAB_BASE), z = (iZ*1.0f/LAB_BASE)*4.5f-0.125f;
+                float x = (iX*1.0f/LAB_BASE)*2.03125f-0.04f, y = (iY*1.0f/LAB_BASE), z = (iZ*1.0f/LAB_BASE)*4.5f-0.125f;
                 ro = C0 * x + C1 * y + C2 * z;
                 go = C3 * x + C4 * y + C5 * z;
                 bo = C6 * x + C7 * y + C8 * z;
