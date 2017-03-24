@@ -3550,212 +3550,156 @@ struct Lab2RGB_b
                 v_int16x8 slvec0(lvec0.val), slvec1(lvec1.val);
                 v_int16x8 savec0(avec0.val), savec1(avec1.val);
                 v_int16x8 sbvec0(bvec0.val), sbvec1(bvec1.val);
-                v_int32x4  lvec00, lvec01, lvec10, lvec11;
-                v_int32x4  avec00, avec01, avec10, avec11;
-                v_int32x4  bvec00, bvec01, bvec10, bvec11;
-                v_expand(slvec0, lvec00, lvec01); v_expand(slvec1, lvec10, lvec11);
-                v_expand(savec0, avec00, avec01); v_expand(savec1, avec10, avec11);
-                v_expand(sbvec0, bvec00, bvec01); v_expand(sbvec1, bvec10, bvec11);
+                v_int32x4  lvecs[4], avecs[4], bvecs[4];
+                v_expand(slvec0, lvecs[0], lvecs[1]); v_expand(slvec1, lvecs[2], lvecs[3]);
+                v_expand(savec0, avecs[0], avecs[1]); v_expand(savec1, avecs[2], avecs[3]);
+                v_expand(sbvec0, bvecs[0], bvecs[1]); v_expand(sbvec1, bvecs[2], bvecs[3]);
 
-                #define REPEAT4(macro) macro(00); macro(01); macro(10); macro(11)
+                v_int32x4 rdw[4], gdw[4], bdw[4];
 
-                /*
-                L = L*BASE/255; // == divConst<14, 255>(L*BASE)
-                */
-                #define LBASE(nn) lvec##nn = divConst<14, 255>(lvec##nn << base_shift)
-                REPEAT4(LBASE);
-                #undef LBASE
+                for(int ir = 0; ir < 4; ir++)
+                {
+                    v_int32x4& liv = lvecs[ir], & aiv = avecs[ir], & biv = bvecs[ir];
+                    v_int32x4 xiv, yiv, ziv;
 
-                /*
-                a = (a - 128)*BASE/256; b = (a - 128)*BASE/256;
-                */
-                v_int32x4 dw128 = v_setall_s32(128);
-                #define SCALE128(r) (r) = ((r) - dw128) << (base_shift - 8)
-                SCALE128(avec00); SCALE128(avec01); SCALE128(avec10); SCALE128(avec11);
-                SCALE128(bvec00); SCALE128(bvec01); SCALE128(bvec10); SCALE128(bvec11);
-                #undef SCALE128
+                    /*
+                    L = L*BASE/255; // == divConst<14, 255>(L*BASE)
+                    */
+                    liv = divConst<14, 255>(liv << base_shift);
 
-                v_int32x4 x_00, x_01, x_10, x_11;
-                v_int32x4 y_00, y_01, y_10, y_11;
-                v_int32x4 z_00, z_01, z_10, z_11;
-                v_int32x4 ify_00, ify_01, ify_10, ify_11;
+                    /*
+                    a = (a - 128)*BASE/256; b = (a - 128)*BASE/256;
+                    */
+                    v_int32x4 dw128 = v_setall_s32(128);
+                    aiv = (aiv - dw128) << (base_shift - 8);
+                    biv = (biv - dw128) << (base_shift - 8);
 
-                v_int32x4 y_00lt, y_01lt, y_10lt, y_11lt;
-                v_int32x4 y_00gt, y_01gt, y_10gt, y_11gt;
+                    v_int32x4 ify;
+                    v_int32x4 y_lt, y_gt;
+                    v_int32x4 ify_lt, ify_gt;
 
-                v_int32x4 ify_00lt, ify_01lt, ify_10lt, ify_11lt;
-                v_int32x4 ify_00gt, ify_01gt, ify_10gt, ify_11gt;
+                    v_int32x4 dwbase16_116 = v_setall_s32(base16_116);
+                    // Less-than part
+                    /*
+                    y = L*100/903.3f; // == divConst<14, 9033>(L*1000);
+                    */
+                    v_int32x4 mul1000 = v_setall_s32(1000);
+                    y_lt = divConst<14, 9033>(liv*mul1000);
 
-                v_int32x4 dwbase16_116 = v_setall_s32(base16_116);
-                // Less-than part
-                /*
-                y = L*100/903.3f; // == divConst<14, 9033>(L*1000);
-                */
-                v_int32x4 mul1000 = v_setall_s32(1000);
-                #define LSCALE(nn) y_##nn##lt = divConst<14, 9033>(lvec##nn*mul1000)
-                REPEAT4(LSCALE);
-                #undef LSCALE
+                    /*
+                    //fy = 7.787f * yy + 16.0f / 116.0f;
+                    ify = base16_116 + y*8 - divConst<14, 1000>(y*213);
+                    */
+                    v_int32x4 mul213 = v_setall_s32(213);
+                    ify_lt = dwbase16_116 + (y_lt << 3) - divConst<14, 1000>(y_lt*mul213);
 
-                /*
-                //fy = 7.787f * yy + 16.0f / 116.0f;
-                ify = base16_116 + y*8 - divConst<14, 1000>(y*213);
-                */
-                v_int32x4 mul213 = v_setall_s32(213);
-                #define IFY(nn) ify_##nn##lt = dwbase16_116 + (y_##nn##lt << 3) - divConst<14, 1000>(y_##nn##lt*mul213)
-                REPEAT4(IFY);
-                #undef IFY
+                    // Greater-than part
+                    /*
+                    ify = divConst<20, 116>(L*100) + base16_116;
+                    */
+                    v_int32x4 mul100 = v_setall_s32(100);
+                    ify_gt = divConst<20, 116>(liv*mul100) + dwbase16_116;
 
-                // Greater-than part
-                /*
-                ify = divConst<20, 116>(L*100) + base16_116;
-                */
-                v_int32x4 mul100 = v_setall_s32(100);
-                #define IFY_L(nn) ify_##nn##gt = divConst<20, 116>(lvec##nn*mul100) + dwbase16_116
-                REPEAT4(IFY_L);
-                #undef IFY_L
+                    /*
+                    y = ify*ify/BASE*ify/BASE;
+                    */
+                    y_gt = (((ify_gt*ify_gt) >> base_shift)*ify_gt) >> base_shift;
 
-                /*
-                y = ify*ify/BASE*ify/BASE;
-                */
-                #define YCUBE(nn) y_##nn##gt = (((ify_##nn##gt*ify_##nn##gt) >> base_shift)*ify_##nn##gt) >> base_shift
-                REPEAT4(YCUBE);
-                #undef YCUBE
+                    // Combining LT and GT parts
+                    /*
+                    y, ify = (L <= lThresh) ? ... : ... ;
+                    */
+                    v_int32x4 dwlThresh = v_setall_s32(lThresh);
+                    v_int32x4 mask;
+                    mask = liv <= dwlThresh;
+                    yiv = v_select(mask, y_lt, y_gt);
+                    ify = v_select(mask, ify_lt, ify_gt);
 
-                // Combining LT and GT parts
-                /*
-                y, ify = (L <= lThresh) ? ... : ... ;
-                */
-                v_int32x4 dwlThresh = v_setall_s32(lThresh);
-                v_int32x4 mask00, mask01, mask10, mask11;
-                #define MASKL(nn) mask##nn = lvec##nn <= dwlThresh
-                REPEAT4(MASKL);
-                #undef MASKL
-                #define MASKY(nn) y_##nn = v_select(mask##nn, y_##nn##lt, y_##nn##gt)
-                REPEAT4(MASKY);
-                #undef MASKY
-                #define MASKIFY(nn) ify_##nn = v_select(mask##nn, ify_##nn##lt, ify_##nn##gt)
-                REPEAT4(MASKIFY);
-                #undef MASKIFY
+                    /*
+                    adiv = divConst<24, 500>(a*256);
+                    bdiv = divConst<24, 200>(b*256);
+                    int ifxz[] = {ify + adiv, ify - bdiv};
+                    */
+                    v_int32x4 adiv, bdiv;
+                    adiv = divConst<24, 500>(aiv << 8);
+                    bdiv = divConst<24, 200>(biv << 8);
 
-                /*
-                adiv = divConst<24, 500>(a*256);
-                bdiv = divConst<24, 200>(b*256);
-                int ifxz[] = {ify + adiv, ify - bdiv};
-                */
-                v_int32x4 adiv_00, adiv_01, adiv_10, adiv_11;
-                v_int32x4 bdiv_00, bdiv_01, bdiv_10, bdiv_11;
-                #define ADIV(nn) adiv_##nn = divConst<24, 500>(avec##nn << 8)
-                #define BDIV(nn) bdiv_##nn = divConst<24, 200>(bvec##nn << 8)
-                REPEAT4(ADIV);
-                REPEAT4(BDIV);
-                #undef ADIV
-                #undef BDIV
+                    /*
+                    x = ifxz[0]; y = y; z = ifxz[1];
+                    */
+                    xiv = ify + adiv;
+                    ziv = ify - bdiv;
 
-                /*
-                x = ifxz[0]; y = y; z = ifxz[1];
-                */
-                #define IFXZ0(nn) x_##nn = ify_##nn + adiv_##nn
-                #define IFXZ1(nn) z_##nn = ify_##nn - bdiv_##nn
-                REPEAT4(IFXZ0);
-                REPEAT4(IFXZ1);
-                #undef IFXZ0
-                #undef IFXZ1
+                    v_int32x4 dwsub = v_setall_s32(BASE*16/116*1000/7787);
+                    v_int32x4 dwfThresh = v_setall_s32(fThresh);
+                    v_int32x4 v_lt, v_gt;
 
-                v_int32x4 dwsub = v_setall_s32(BASE*16/116*1000/7787);
-                v_int32x4 dwfThresh = v_setall_s32(fThresh);
-                v_int32x4 v_00lt, v_01lt, v_10lt, v_11lt;
-                v_int32x4 v_00gt, v_01gt, v_10gt, v_11gt;
+                    // k = 0
+                    /*
+                    v = (v <= fThresh) ? ... : ... ;
+                    */
+                    mask = xiv <= dwfThresh;
 
-                // k = 0
-                /*
-                v = (v <= fThresh) ? ... : ... ;
-                */
-                #define MASKZ(nn) mask##nn = x_##nn <= dwfThresh
-                REPEAT4(MASKZ);
-                #undef MASKZ
+                    // Less-than part
+                    /*
+                    v = divConst<14, 7787>(v*1000) - BASE*16/116*1000/7787;
+                    */
+                    v_lt = divConst<14, 7787>(xiv*mul1000) - dwsub;
 
-                // Less-than part
-                /*
-                v = divConst<14, 7787>(v*1000) - BASE*16/116*1000/7787;
-                */
-                #define LTP(nn) v_##nn##lt = divConst<14, 7787>(x_##nn*mul1000) - dwsub
-                REPEAT4(LTP);
-                #undef LTP
+                    // Greater-than part
+                    /*
+                    v = v*v/BASE*v/BASE;
+                    */
+                    v_gt = (((xiv*xiv) >> base_shift) * xiv) >> base_shift;
 
-                // Greater-than part
-                /*
-                v = v*v/BASE*v/BASE;
-                */
-                #define GTP(nn) v_##nn##gt = (((x_##nn*x_##nn) >> base_shift) * x_##nn) >> base_shift
-                REPEAT4(GTP);
-                #undef GTP
+                    // Combining LT ang GT parts
+                    xiv = v_select(mask, v_lt, v_gt);
 
-                // Combining LT ang GT parts
-                #define MASKXZ(nn) x_##nn = v_select(mask##nn, v_##nn##lt, v_##nn##gt)
-                REPEAT4(MASKXZ);
-                #undef MASKXZ
+                    // k = 1
+                    /*
+                    v = (v <= fThresh) ? ... : ... ;
+                    */
+                    mask = ziv <= dwfThresh;
 
-                // k = 1
-                /*
-                v = (v <= fThresh) ? ... : ... ;
-                */
-                #define MASKZ(nn) mask##nn = z_##nn <= dwfThresh
-                REPEAT4(MASKZ);
-                #undef MASKZ
+                    // Less-than part
+                    /*
+                    v = divConst<14, 7787>(v*1000) - BASE*16/116*1000/7787;
+                    */
+                    v_lt = divConst<14, 7787>(ziv*mul1000) - dwsub;
 
-                // Less-than part
-                /*
-                v = divConst<14, 7787>(v*1000) - BASE*16/116*1000/7787;
-                */
-                #define LTP(nn) v_##nn##lt = divConst<14, 7787>(z_##nn*mul1000) - dwsub
-                REPEAT4(LTP);
-                #undef LTP
+                    // Greater-than part
+                    /*
+                    v = v*v/BASE*v/BASE;
+                    */
+                    v_gt = (((ziv*ziv) >> base_shift) * ziv) >> base_shift;
 
-                // Greater-than part
-                /*
-                v = v*v/BASE*v/BASE;
-                */
-                #define GTP(nn) v_##nn##gt = (((z_##nn*z_##nn) >> base_shift) * z_##nn) >> base_shift
-                REPEAT4(GTP);
-                #undef GTP
+                    // Combining LT ang GT parts
+                    ziv = v_select(mask, v_lt, v_gt);
 
-                // Combining LT ang GT parts
-                #define MASKXZ(nn) z_##nn = v_select(mask##nn, v_##nn##lt, v_##nn##gt)
-                REPEAT4(MASKXZ);
-                #undef MASKXZ
+                    const int shift = lab_shift+(base_shift-inv_gamma_shift);
+                    /*
+                        ro = CV_DESCALE(C0 * x + C1 * y + C2 * z, shift);
+                        go = CV_DESCALE(C3 * x + C4 * y + C5 * z, shift);
+                        bo = CV_DESCALE(C6 * x + C7 * y + C8 * z, shift);
+                    */
 
-                #undef REPEAT4
+                    v_int32x4 descaleReg = v_setall_s32(1 << ((shift)-1));
+                    v_int32x4 c0reg = v_setall_s32(C0), c1reg = v_setall_s32(C1), c2reg = v_setall_s32(C2),
+                              c3reg = v_setall_s32(C3), c4reg = v_setall_s32(C4), c5reg = v_setall_s32(C5),
+                              c6reg = v_setall_s32(C6), c7reg = v_setall_s32(C7), c8reg = v_setall_s32(C8);
 
-                const int shift = lab_shift+(base_shift-inv_gamma_shift);
-                /*
-                    ro = CV_DESCALE(C0 * x + C1 * y + C2 * z, shift);
-                    go = CV_DESCALE(C3 * x + C4 * y + C5 * z, shift);
-                    bo = CV_DESCALE(C6 * x + C7 * y + C8 * z, shift);
-                */
-                v_int32x4 rdw_00, rdw_01, rdw_10, rdw_11;
-                v_int32x4 gdw_00, gdw_01, gdw_10, gdw_11;
-                v_int32x4 bdw_00, bdw_01, bdw_10, bdw_11;
-                v_int32x4 descaleReg = v_setall_s32(1 << ((shift)-1));
-                v_int32x4 c0reg = v_setall_s32(C0), c1reg = v_setall_s32(C1), c2reg = v_setall_s32(C2),
-                          c3reg = v_setall_s32(C3), c4reg = v_setall_s32(C4), c5reg = v_setall_s32(C5),
-                          c6reg = v_setall_s32(C6), c7reg = v_setall_s32(C7), c8reg = v_setall_s32(C8);
+                    v_int32x4 & r_iv = rdw[ir], & g_iv = gdw[ir], & b_iv = bdw[ir];
 
-                #define MUL_XYZ(l, xn, yn, zn) \
-                    l##dw_00 = (x_00*c##xn##reg + y_00*c##yn##reg + z_00*c##zn##reg + descaleReg) >> shift;\
-                    l##dw_01 = (x_01*c##xn##reg + y_01*c##yn##reg + z_01*c##zn##reg + descaleReg) >> shift;\
-                    l##dw_10 = (x_10*c##xn##reg + y_10*c##yn##reg + z_10*c##zn##reg + descaleReg) >> shift;\
-                    l##dw_11 = (x_11*c##xn##reg + y_11*c##yn##reg + z_11*c##zn##reg + descaleReg) >> shift
-
-                MUL_XYZ(r, 0, 1, 2);
-                MUL_XYZ(g, 3, 4, 5);
-                MUL_XYZ(b, 6, 7, 8);
-                #undef MUL_XYZ
+                    r_iv = (xiv*c0reg + yiv*c1reg + ziv*c2reg + descaleReg) >> shift;
+                    g_iv = (xiv*c3reg + yiv*c4reg + ziv*c5reg + descaleReg) >> shift;
+                    b_iv = (xiv*c6reg + yiv*c7reg + ziv*c8reg + descaleReg) >> shift;
+                }
 
                 v_int16x8 r_vec0s, r_vec1s, g_vec0s, g_vec1s, b_vec0s, b_vec1s;
 
-                r_vec0s = v_pack(rdw_00, rdw_01); r_vec1s = v_pack(rdw_10, rdw_11);
-                g_vec0s = v_pack(gdw_00, gdw_01); g_vec1s = v_pack(gdw_10, gdw_11);
-                b_vec0s = v_pack(bdw_00, bdw_01); b_vec1s = v_pack(bdw_10, bdw_11);
+                r_vec0s = v_pack(rdw[0], rdw[1]); r_vec1s = v_pack(rdw[2], rdw[3]);
+                g_vec0s = v_pack(gdw[0], gdw[1]); g_vec1s = v_pack(gdw[2], gdw[3]);
+                b_vec0s = v_pack(bdw[0], bdw[1]); b_vec1s = v_pack(bdw[2], bdw[3]);
 
                 //limit indices in table
                 v_int16x8 tabsz = v_setall_s16((int)INV_GAMMA_TAB_SIZE-1);
