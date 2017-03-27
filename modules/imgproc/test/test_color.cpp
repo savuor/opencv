@@ -2939,7 +2939,81 @@ struct RGB2Lab_f
         i = 0;
         if(useTetraInterpolation)
         {
-            //TODO: add packed version
+            if(enablePacked)
+            {
+                for(; i < n - 4*3*2; i += 3*4*2, src += scn*4*2)
+                {
+                    v_float32x4 rvec0, gvec0, bvec0, rvec1, gvec1, bvec1;
+                    v_float32x4 dummy0, dummy1;
+                    if(scn == 3)
+                    {
+                        v_load_deinterleave(src, rvec0, gvec0, bvec0);
+                        v_load_deinterleave(src + scn*4, rvec1, gvec1, bvec1);
+                    }
+                    else // scn == 4
+                    {
+                        v_load_deinterleave(src, rvec0, gvec0, bvec0, dummy0);
+                        v_load_deinterleave(src + scn*4, rvec1, gvec1, bvec1, dummy1);
+                    }
+
+                    if(bIdx)
+                    {
+                        dummy0 = rvec0; rvec0 = bvec0; bvec0 = dummy0;
+                        dummy1 = rvec1; rvec1 = bvec1; bvec1 = dummy1;
+                    }
+
+                    v_float32x4 zerof = v_setzero_f32(), onef = v_setall_f32(1.0f);
+                    /* clip() */
+                    #define clipv(r) (r) = v_min(v_max((r), zerof), onef)
+                    clipv(rvec0); clipv(rvec1);
+                    clipv(gvec0); clipv(gvec1);
+                    clipv(bvec0); clipv(bvec1);
+                    #undef clipv
+                    /* int iR = R*LAB_BASE, iG = G*LAB_BASE, iB = B*LAB_BASE, iL, ia, ib; */
+                    v_float32x4 basef = v_setall_f32(LAB_BASE);
+                    rvec0 *= basef, gvec0 *= basef, bvec0 *= basef;
+                    rvec1 *= basef, gvec1 *= basef, bvec1 *= basef;
+
+                    v_int32x4 irvec0, igvec0, ibvec0, irvec1, igvec1, ibvec1;
+                    v_int16x8 irvec, igvec, ibvec;
+                    irvec0 = v_round(rvec0); irvec1 = v_round(rvec1);
+                    irvec = v_pack(irvec0, irvec1);
+                    igvec0 = v_round(gvec0); igvec1 = v_round(gvec1);
+                    igvec = v_pack(igvec0, igvec1);
+                    ibvec0 = v_round(bvec0); ibvec1 = v_round(bvec1);
+                    ibvec = v_pack(ibvec0, ibvec1);
+                    v_uint16x8 uirvec(irvec.val), uigvec(igvec.val), uibvec(ibvec.val);
+
+                    //don't use XYZ table in RGB2Lab conversion
+                    v_uint16x8 ui_lvec, ui_avec, ui_bvec;
+                    trilinearPackedInterpolate(uirvec, uigvec, uibvec, RGB2LabLUT_s16, ui_lvec, ui_avec, ui_bvec);
+                    v_int16x8 i_lvec(ui_lvec.val), i_avec(ui_avec.val), i_bvec(ui_bvec.val);
+
+                    /* float L = iL*1.0f/LAB_BASE, a = ia*1.0f/LAB_BASE, b = ib*1.0f/LAB_BASE; */
+                    v_int32x4 i_lvec0, i_avec0, i_bvec0, i_lvec1, i_avec1, i_bvec1;
+                    v_expand(i_lvec, i_lvec0, i_lvec1);
+                    v_expand(i_avec, i_avec0, i_avec1);
+                    v_expand(i_bvec, i_bvec0, i_bvec1);
+                    v_float32x4 l_vec0, a_vec0, b_vec0, l_vec1, a_vec1, b_vec1;
+                    l_vec0 = v_cvt_f32(i_lvec0); l_vec1 = v_cvt_f32(i_lvec1);
+                    a_vec0 = v_cvt_f32(i_avec0); a_vec1 = v_cvt_f32(i_avec1);
+                    b_vec0 = v_cvt_f32(i_bvec0); b_vec1 = v_cvt_f32(i_bvec1);
+                    /* dst[i] = L*100.0f */
+                    l_vec0 = l_vec0*v_setall_f32(100.0f/LAB_BASE);
+                    l_vec1 = l_vec1*v_setall_f32(100.0f/LAB_BASE);
+                    /*
+                    dst[i + 1] = a*256.0f - 128.0f;
+                    dst[i + 2] = b*256.0f - 128.0f;
+                    */
+                    a_vec0 = a_vec0*v_setall_f32(256.0f/LAB_BASE) - v_setall_f32(128.0f);
+                    a_vec1 = a_vec1*v_setall_f32(256.0f/LAB_BASE) - v_setall_f32(128.0f);
+                    b_vec0 = b_vec0*v_setall_f32(256.0f/LAB_BASE) - v_setall_f32(128.0f);
+                    b_vec1 = b_vec1*v_setall_f32(256.0f/LAB_BASE) - v_setall_f32(128.0f);
+
+                    v_store_interleave(dst + i, l_vec0, a_vec0, b_vec0);
+                    v_store_interleave(dst + i + 3*4, l_vec1, a_vec1, b_vec1);
+                }
+            }
 
             for(; i < n; i += 3, src += scn)
             {
@@ -3131,6 +3205,7 @@ struct Lab2RGB_f
         if(useTetraInterpolation)
         {
             //TODO: insert packed version
+            //TODO: no interpolation here, do it as it's done in _b version
 
             for (; i < n; i += 3, dst += dcn)
             {
@@ -3932,8 +4007,8 @@ TEST(ImgProc_Color, LabCheckWorking)
     cv::setUseOptimized(false);
 
     //settings
-    #define INT_DATA 1
-    #define TO_BGR 1
+    #define INT_DATA 0
+    #define TO_BGR 0
     const bool randomFill = true;
 
     enableTetraInterpolation = true;
