@@ -1841,9 +1841,9 @@ struct Lab2RGB_f
                 int j = 0;
                 for( ; j < dn*3; j += 3 )
                 {
-                    buf[j]   = (uchar)(src[j]*(255.f/100.0f));
-                    buf[j+1] = (uchar)(src[j+1] + 128.f);
-                    buf[j+2] = (uchar)(src[j+2] + 128.f);
+                    buf[j]   = saturate_cast<uchar>(src[j]*(255.f/100.0f));
+                    buf[j+1] = saturate_cast<uchar>(src[j+1] + 128.f);
+                    buf[j+2] = saturate_cast<uchar>(src[j+2] + 128.f);
                 }
 
                 icvt(buf, buf, dn);
