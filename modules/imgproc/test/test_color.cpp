@@ -2882,9 +2882,7 @@ static inline void trilinearPackedInterpolate(const v_uint16x8 inX, const v_uint
                        v_reduce_sum(v_dotprod(l##5, w5)),\
                        v_reduce_sum(v_dotprod(l##6, w6)),\
                        v_reduce_sum(v_dotprod(l##7, w7)));\
-    part0 = (part0 + v_setall_u32(1 << (trilinear_shift*3-1))) >> (trilinear_shift*3);\
-    part1 = (part1 + v_setall_u32(1 << (trilinear_shift*3-1))) >> (trilinear_shift*3);\
-    (ll) = v_pack(part0, part1)
+    (ll) = v_rshr_pack<trilinear_shift*3>(part0, part1)
 
     DOT_SHIFT_PACK(a, outA);
     DOT_SHIFT_PACK(b, outB);
@@ -4216,19 +4214,25 @@ TEST(ImgProc_Color, LabCheckWorking)
         }
         std::cout << std::endl;
 
-        Mat tmp = INT_DATA ? mGold : (TO_BGR ? mGold*256 : mGold+128);
+        Mat tmp = INT_DATA ? mGold : (TO_BGR ? mGold*256 : mGold+Scalar(0, 128, 128));
         imwrite(format((dir + "noInter%03d.png").c_str(),  (TO_BGR ? l : blue)), tmp);
-        tmp = INT_DATA ? mInter : (TO_BGR ? mInter*256 : mInter+128);
+
+        tmp = INT_DATA ? mInter : (TO_BGR ? mInter*256 : mInter+Scalar(0, 128, 128));
         imwrite(format((dir + "useInter%03d.png").c_str(), (TO_BGR ? l : blue)), tmp);
-        tmp = INT_DATA ? (TO_BGR ? chInter[2] : chInter[1]) : (TO_BGR ? chInter[2]*256 : chInter[1]+128);
+
+        tmp = INT_DATA ? (TO_BGR ? chInter[2] : chInter[1]) : (TO_BGR ? chInter[2]*256 : chInter[1]+Scalar::all(128));
         imwrite(format((dir + "red%03d.png").c_str(),      (TO_BGR ? l : blue)), tmp);
-        tmp = INT_DATA ? (mGold-mInter) : (TO_BGR ? (mGold-mInter)*256+128 : (mGold-mInter)+128);
+
+        tmp = INT_DATA ? (mGold-mInter) : (TO_BGR ? (mGold-mInter)*256+Scalar::all(128) : (mGold-mInter)+Scalar::all(128));
         imwrite(format((dir + "diff%03d.png").c_str(),     (TO_BGR ? l : blue)), tmp);
+
         tmp = INT_DATA ? abs(mGold-mInter) : (TO_BGR ? abs(mGold-mInter)*256 : abs(mGold-mInter));
         imwrite(format((dir + "absdiff%03d.png").c_str(),  (TO_BGR ? l : blue)), tmp);
-        tmp = INT_DATA ? backGoldDiff : (TO_BGR ? backGoldDiff+128 : backGoldDiff*256);
+
+        tmp = INT_DATA ? backGoldDiff : (TO_BGR ? backGoldDiff+Scalar::all(128) : backGoldDiff*256);
         imwrite(format((dir + "backgolddiff%03d.png").c_str(),  (TO_BGR ? l : blue)), tmp);
-        tmp = INT_DATA ? backInterDiff : (TO_BGR ? backInterDiff+128 : backInterDiff*256);
+
+        tmp = INT_DATA ? backInterDiff : (TO_BGR ? backInterDiff+Scalar::all(128) : backInterDiff*256);
         imwrite(format((dir + "backinterdiff%03d.png").c_str(), (TO_BGR ? l : blue)), tmp);
 
         if(randomFill)
