@@ -1832,6 +1832,8 @@ struct Lab2RGB_f
             int dcn = dstcn;
             float alpha = ColorChannel<float>::max();
             uchar CV_DECL_ALIGNED(16) buf[BLOCK_SIZE*3];
+            static const float labmul[3] = {255.f/100.0f, 1.f, 1.f};
+            static const float labadd[3] = {0.f, 128.f, 128.f};
 
             for(int i = 0; i < n; i += BLOCK_SIZE, src += BLOCK_SIZE*3 )
             {
@@ -1840,10 +1842,12 @@ struct Lab2RGB_f
                 if(enablePacked)
                 {
                     v_float32x4 vr0, vr1, vr2;
-                    v_float32x4 vm0(255.f/100.0f, 1.f, 1.f, 255.f/100.0f);
-                    v_float32x4 vm1(1.f, 1.f, 255.f/100.0f, 1.f), vm2(1.f, 255.f/100.0f, 1.f, 1.f);
-                    v_float32x4 vp0(0.f, 128.f, 128.f, 0.f), vp1(128.f, 128.f, 0.f, 128.f);
-                    v_float32x4 vp2(128.f, 0.f, 128.f, 128.f);
+                    v_float32x4 vm0(labmul[0], labmul[1], labmul[2], labmul[0]);
+                    v_float32x4 vm1(labmul[1], labmul[2], labmul[0], labmul[1]);
+                    v_float32x4 vm2(labmul[2], labmul[0], labmul[1], labmul[2]);
+                    v_float32x4 vp0(labadd[0], labadd[1], labadd[2], labadd[0]);
+                    v_float32x4 vp1(labadd[1], labadd[2], labadd[0], labadd[1]);
+                    v_float32x4 vp2(labadd[2], labadd[0], labadd[1], labadd[2]);
                     static const int nPix = 8;
                     for(; j < dn*3-nPix*3; j += nPix*3)
                     {
@@ -1876,9 +1880,9 @@ struct Lab2RGB_f
 
                 for( ; j < dn*3; j += 3 )
                 {
-                    buf[j]   = saturate_cast<uchar>(src[j]*(255.f/100.0f));
-                    buf[j+1] = saturate_cast<uchar>(src[j+1] + 128.f);
-                    buf[j+2] = saturate_cast<uchar>(src[j+2] + 128.f);
+                    buf[j]   = saturate_cast<uchar>(src[j]*labmul[0]);
+                    buf[j+1] = saturate_cast<uchar>(src[j+1] + labadd[1]);
+                    buf[j+2] = saturate_cast<uchar>(src[j+2] + labadd[2]);
                 }
 
                 icvt(buf, buf, dn);
