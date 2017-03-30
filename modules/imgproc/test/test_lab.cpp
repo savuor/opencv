@@ -1320,6 +1320,7 @@ struct Lab2RGBinteger
         }
     }
 
+    // L, a, b should be in [-LAB_BASE; +LAB_BASE]
     inline void process(const int L, const int a, const int b, int& ro, int& go, int& bo) const
     {
         int x, y, z;
@@ -1384,6 +1385,7 @@ struct Lab2RGBinteger
         bo = tab[bo];
     }
 
+    // L, a, b should be in [-LAB_BASE; +LAB_BASE]
     inline void process(v_int32x4  liv, v_int32x4  aiv, v_int32x4  biv,
                         v_int32x4& bdw, v_int32x4& gdw, v_int32x4& rdw) const
     {
@@ -1393,14 +1395,6 @@ struct Lab2RGBinteger
         int C6 = coeffs[6], C7 = coeffs[7], C8 = coeffs[8];
 
         v_int32x4 xiv, yiv, ziv;
-
-        /* L = L*BASE/255; // == divConst<14, 255>(L*BASE) */
-        liv = divConst<14, 255>(liv << base_shift);
-
-        /* a = (a - 128)*BASE/256; b = (a - 128)*BASE/256; */
-        aiv = (aiv - v_setall_s32(128)) << (base_shift - 8);
-        biv = (biv - v_setall_s32(128)) << (base_shift - 8);
-
         v_int32x4 ify;
         v_int32x4 y_lt, y_gt;
         v_int32x4 ify_lt, ify_gt;
@@ -1430,7 +1424,7 @@ struct Lab2RGBinteger
             adiv = divConst<24, 500>(a*256);
             bdiv = divConst<24, 200>(b*256);
             int ifxz[] = {ify + adiv, ify - bdiv};
-            */
+        */
         v_int32x4 adiv, bdiv;
         adiv = divConst<24, 500>(aiv << 8);
         bdiv = divConst<24, 200>(biv << 8);
@@ -1488,6 +1482,74 @@ struct Lab2RGBinteger
         v_store_aligned(shifts, bdw);
         bdw = v_int32x4(tab[shifts[0]], tab[shifts[1]], tab[shifts[2]], tab[shifts[3]]);
     }
+
+    void operator()(const float* src, float* dst, int n) const
+    {
+        int dcn = dstcn, bIdx = blueIdx;
+        float alpha = ColorChannel<float>::max();
+
+        int i = 0;
+        if(enablePacked)
+        {
+            v_float32x4 vldiv  = v_setall_f32(BASE/100.0f);
+            v_float32x4 vadiv  = v_setall_f32(BASE/256.0f);
+            v_float32x4 vf255  = v_setall_f32(255.f);
+            static const int nPixels = 4;
+            for(; i <= n*3-3*nPixels; i += 3*nPixels, dst += dcn*nPixels)
+            {
+                /*
+                int L = saturate_cast<int>(src[i]*BASE/100.0f);
+                int a = saturate_cast<int>(src[i + 1]*BASE/256);
+                int b = saturate_cast<int>(src[i + 2]*BASE/256);
+                */
+                v_float32x4 vl, va, vb;
+                v_load_deinterleave(src + i, vl, va, vb);
+                vl *= vldiv; va *= vadiv; vb *= vadiv;
+
+                v_int32x4 ivl = v_round(vl), iva = v_round(va), ivb = v_round(vb);
+                v_int32x4 r_vecs, g_vecs, b_vecs;
+
+                process(ivl, iva, ivb, b_vecs, g_vecs, r_vecs);
+
+                v_float32x4 v_r, v_g, v_b;
+                v_r = v_cvt_f32(r_vecs)/vf255;
+                v_g = v_cvt_f32(g_vecs)/vf255;
+                v_b = v_cvt_f32(b_vecs)/vf255;
+
+                v_float32x4 dummy;
+                if(bIdx == 0)
+                {
+                    dummy = v_r; v_r = v_b; v_b = dummy;
+                }
+
+                if(dcn == 4)
+                {
+                    v_store_interleave(dst, v_b, v_g, v_r, v_setall_f32(alpha));
+                }
+                else // dcn == 3
+                {
+                    v_store_interleave(dst, v_b, v_g, v_r);
+                }
+            }
+        }
+
+        for(; i < n*3; i += 3, dst += dcn)
+        {
+            int L = saturate_cast<int>(src[i]*BASE/100.0f);
+            int a = saturate_cast<int>(src[i + 1]*BASE/256);
+            int b = saturate_cast<int>(src[i + 2]*BASE/256);
+
+            int ro, go, bo;
+            process(L, a, b, ro, go, bo);
+
+            dst[bIdx^2] = bo/255.f;
+            dst[1]      = go/255.f;
+            dst[bIdx]   = ro/255.f;
+            if(dcn == 4)
+                dst[3] = alpha;
+        }
+    }
+
     void operator()(const uchar* src, uchar* dst, int n) const
     {
         int i, dcn = dstcn;
@@ -1519,9 +1581,16 @@ struct Lab2RGBinteger
                 v_expand(sbvec0, bvecs[0], bvecs[1]); v_expand(sbvec1, bvecs[2], bvecs[3]);
 
                 v_int32x4 r_vecs[4], g_vecs[4], b_vecs[4];
-
                 for(int k = 0; k < 4; k++)
+                {
+                    /* L = L*BASE/255; // == divConst<14, 255>(L*BASE) */
+                    lvecs[k] = divConst<14, 255>(lvecs[k] << base_shift);
+
+                    /* a = (a - 128)*BASE/256; b = (a - 128)*BASE/256; */
+                    avecs[k] = (avecs[k] - v_setall_s32(128)) << (base_shift - 8);
+                    bvecs[k] = (bvecs[k] - v_setall_s32(128)) << (base_shift - 8);
                     process(lvecs[k], avecs[k], bvecs[k], b_vecs[k], g_vecs[k], r_vecs[k]);
+                }
 
                 v_int16x8 s_rvec0, s_rvec1, s_gvec0, s_gvec1, s_bvec0, s_bvec1;
                 s_rvec0 = v_pack(r_vecs[0], r_vecs[1]), s_rvec1 = v_pack(r_vecs[2], r_vecs[3]);
@@ -1572,15 +1641,6 @@ struct Lab2RGBinteger
     }
 
     int dstcn;
-    #if CV_NEON
-    float32x4_t v_scale, v_scale_inv, v_128;
-    uint8x8_t v_alpha;
-    #elif CV_SSE2
-    __m128 v_scale;
-    __m128 v_alpha;
-    __m128i v_zero;
-    bool haveSIMD;
-    #endif
     int blueIdx;
     float coeffs[9];
     bool srgb;
@@ -1840,138 +1900,7 @@ struct Lab2RGB_f
     {
         if(useBitExactness)
         {
-            int dcn = dstcn;
-            float alpha = ColorChannel<float>::max();
-            uchar CV_DECL_ALIGNED(16) buf[BLOCK_SIZE*3];
-            static const float labmul[3] = {255.f/100.0f, 1.f, 1.f};
-            static const float labadd[3] = {0.f, 128.f, 128.f};
-
-            for(int i = 0; i < n; i += BLOCK_SIZE, src += BLOCK_SIZE*3 )
-            {
-                int dn = std::min(n - i, (int)BLOCK_SIZE);
-                int j = 0;
-                if(enablePacked)
-                {
-                    v_float32x4 vr0, vr1, vr2;
-                    v_float32x4 vm0(labmul[0], labmul[1], labmul[2], labmul[0]);
-                    v_float32x4 vm1(labmul[1], labmul[2], labmul[0], labmul[1]);
-                    v_float32x4 vm2(labmul[2], labmul[0], labmul[1], labmul[2]);
-                    v_float32x4 vp0(labadd[0], labadd[1], labadd[2], labadd[0]);
-                    v_float32x4 vp1(labadd[1], labadd[2], labadd[0], labadd[1]);
-                    v_float32x4 vp2(labadd[2], labadd[0], labadd[1], labadd[2]);
-                    static const int nPix = 8;
-                    for(; j < dn*3-nPix*3; j += nPix*3)
-                    {
-                        v_int32x4 ir0, ir1, ir2, ir3, ir4, ir5;
-
-                        vr0 = v_load(src + j);
-                        vr1 = v_load(src + j + 4);
-                        vr2 = v_load(src + j + 8);
-                        vr0 = v_muladd(vr0, vm0, vp0);
-                        vr1 = v_muladd(vr1, vm1, vp1);
-                        vr2 = v_muladd(vr2, vm2, vp2);
-                        ir0 = v_round(vr0); ir1 = v_round(vr1); ir2 = v_round(vr2);
-
-                        vr0 = v_load(src + j + 12);
-                        vr1 = v_load(src + j + 16);
-                        vr2 = v_load(src + j + 20);
-                        vr0 = v_muladd(vr0, vm0, vp0);
-                        vr1 = v_muladd(vr1, vm1, vp1);
-                        vr2 = v_muladd(vr2, vm2, vp2);
-                        ir3 = v_round(vr0); ir4 = v_round(vr1); ir5 = v_round(vr2);
-
-                        v_int16x8 shv0 = v_pack(ir0, ir1);
-                        v_int16x8 shv1 = v_pack(ir2, ir3);
-                        v_int16x8 shv2 = v_pack(ir4, ir5);
-                        v_pack_u_store(buf + j, shv0);
-                        v_pack_u_store(buf + j +  8, shv1);
-                        v_pack_u_store(buf + j + 16, shv2);
-                    }
-                }
-
-                for( ; j < dn*3; j += 3 )
-                {
-                    buf[j]   = saturate_cast<uchar>(src[j]*labmul[0]);
-                    buf[j+1] = saturate_cast<uchar>(src[j+1] + labadd[1]);
-                    buf[j+2] = saturate_cast<uchar>(src[j+2] + labadd[2]);
-                }
-
-                icvt(buf, buf, dn);
-                j = 0;
-                if(enablePacked)
-                {
-                    v_float32x4 f255 = v_setall_f32(255.f);
-                    if(dcn == 4)
-                    {
-                        static const int nPix = 16;
-                        v_float32x4 valpha = v_setall_f32(alpha);
-                        for(; j < dn*3-nPix*3; j += nPix*3, dst += dcn*nPix)
-                        {
-                            v_uint8x16 vr, vg, vb;
-                            v_load_deinterleave(buf + j, vr, vg, vb);
-                            v_uint16x8 ur0, ur1, ug0, ug1, ub0, ub1;
-                            v_expand(vr, ur0, ur1);
-                            v_expand(vg, ug0, ug1);
-                            v_expand(vb, ub0, ub1);
-                            v_int16x8 sr0(ur0.val), sr1(ur1.val);
-                            v_int16x8 sg0(ug0.val), sg1(ug1.val);
-                            v_int16x8 sb0(ub0.val), sb1(ub1.val);
-                            v_int32x4 ir0, ir1, ig0, ig1, ib0, ib1;
-                            //pixels from 0 to 7
-                            v_expand(sr0, ir0, ir1);
-                            v_expand(sg0, ig0, ig1);
-                            v_expand(sb0, ib0, ib1);
-                            v_float32x4 fr0, fr1, fg0, fg1, fb0, fb1;
-                            fr0 = v_cvt_f32(ir0); fg0 = v_cvt_f32(ig0); fb0 = v_cvt_f32(ib0);
-                            fr1 = v_cvt_f32(ir1); fg1 = v_cvt_f32(ig1); fb1 = v_cvt_f32(ib1);
-                            fr0 /= f255; fg0 /= f255; fb0 /= f255;
-                            fr1 /= f255; fg1 /= f255; fb1 /= f255;
-                            v_store_interleave(dst, fr0, fg0, fb0, valpha);
-                            v_store_interleave(dst + 4*4, fr1, fg1, fb1, valpha);
-                            //pixels from 8 to 15
-                            v_expand(sr1, ir0, ir1);
-                            v_expand(sg1, ig0, ig1);
-                            v_expand(sb1, ib0, ib1);
-                            fr0 = v_cvt_f32(ir0); fg0 = v_cvt_f32(ig0); fb0 = v_cvt_f32(ib0);
-                            fr1 = v_cvt_f32(ir1); fg1 = v_cvt_f32(ig1); fb1 = v_cvt_f32(ib1);
-                            fr0 /= f255; fg0 /= f255; fb0 /= f255;
-                            fr1 /= f255; fg1 /= f255; fb1 /= f255;
-                            v_store_interleave(dst +  8*4, fr0, fg0, fb0, valpha);
-                            v_store_interleave(dst + 12*4, fr1, fg1, fb1, valpha);
-                        }
-                    }
-                    else //dcn == 3
-                    {
-                        static const int step = 16;
-                        for(; j < dn*3-step*3; )
-                        {
-                            for(int k = 0; k < 3; k++, j += step, dst += step)
-                            {
-                                v_uint8x16 v8 = v_load(buf + j);
-                                v_uint16x8 u0, u1;
-                                v_expand(v8, u0, u1);
-                                v_int16x8 v0(u0.val), v1(u1.val);
-                                v_int32x4 i0, i1, i2, i3;
-                                v_expand(v0, i0, i1); v_expand(v1, i2, i3);
-                                v_float32x4 f0 = v_cvt_f32(i0), f1 = v_cvt_f32(i1);
-                                v_float32x4 f2 = v_cvt_f32(i2), f3 = v_cvt_f32(i3);
-                                f0 /= f255; f1 /= f255; f2 /= f255; f3 /= f255;
-                                v_store(dst, f0);     v_store(dst + 4, f1);
-                                v_store(dst + 8, f2); v_store(dst + 12, f3);
-                            }
-                        }
-                    }
-                }
-
-                for( ; j < dn*3; j += 3, dst += dcn )
-                {
-                    dst[0] = buf[j]/255.f;
-                    dst[1] = buf[j+1]/255.f;
-                    dst[2] = buf[j+2]/255.f;
-                    if( dcn == 4 )
-                        dst[3] = alpha;
-                }
-            }
+            icvt(src, dst, n);
         }
         else
         {
@@ -1995,7 +1924,7 @@ TEST(ImgProc_Color, LabCheckWorking)
     cv::setUseOptimized(false);
 
     //settings
-    #define INT_DATA 1
+    #define INT_DATA 0
     #define TO_BGR 1
     const bool randomFill = true;
 
