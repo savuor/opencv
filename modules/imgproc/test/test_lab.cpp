@@ -1296,6 +1296,13 @@ struct Lab2RGBinteger
 {
     typedef uchar channel_type;
 
+    static const int base_shift = 14;
+    static const int BASE = (1 << base_shift);
+    static const int lThresh = 0.008856f * 903.3f * (long long int)BASE/100;
+    static const int fThresh = (7.787f * 0.008856f + 16.0f / 116.0f)*BASE;
+    static const int base16_116 = BASE*16/116 + 1;
+    static const int shift = lab_shift+(base_shift-inv_gamma_shift);
+
     Lab2RGBinteger( int _dstcn, int _blueIdx, const float* _coeffs,
                const float* _whitept, bool _srgb )
     : dstcn(_dstcn), blueIdx(_blueIdx), srgb(_srgb)
@@ -1313,23 +1320,180 @@ struct Lab2RGBinteger
         }
     }
 
+    inline void process(const int L, const int a, const int b, int& ro, int& go, int& bo) const
+    {
+        int x, y, z;
+
+        int ify;
+        if(L <= lThresh)
+        {
+            //yy = li / 903.3f;
+            //y = L*100/903.3f;
+            y = divConst<14, 9033>(L*1000);
+
+            //fy = 7.787f * yy + 16.0f / 116.0f;
+            ify = base16_116 + y*8 - y*213/1000;
+        }
+        else
+        {
+            //fy = (li + 16.0f) / 116.0f;
+            ify = L*100/116 + base16_116;
+
+            //yy = fy * fy * fy;
+            y = ify*ify/BASE*ify/BASE;
+        }
+
+        //float fxz[] = { ai / 500.0f + fy, fy - bi / 200.0f };
+        int adiv, bdiv;
+        //adiv = a*256/500, bdiv = b*256/200;
+        adiv = divConst<24, 500>(a*256);
+        bdiv = divConst<24, 200>(b*256);
+
+        int ifxz[] = {ify + adiv, ify - bdiv};
+        for(int k = 0; k < 2; k++)
+        {
+            int& v = ifxz[k];
+            if(v <= fThresh)
+            {
+                //fxz[k] = (fxz[k] - 16.0f / 116.0f) / 7.787f;
+                v = v*1000/7787 - BASE*16/116*1000/7787;
+            }
+            else
+            {
+                //fxz[k] = fxz[k] * fxz[k] * fxz[k];
+                v = v*v/BASE*v/BASE;
+            }
+        }
+        x = ifxz[0]; y = y; z = ifxz[1];
+
+        int C0 = coeffs[0], C1 = coeffs[1], C2 = coeffs[2];
+        int C3 = coeffs[3], C4 = coeffs[4], C5 = coeffs[5];
+        int C6 = coeffs[6], C7 = coeffs[7], C8 = coeffs[8];
+
+        ro = CV_DESCALE(C0 * x + C1 * y + C2 * z, shift);
+        go = CV_DESCALE(C3 * x + C4 * y + C5 * z, shift);
+        bo = CV_DESCALE(C6 * x + C7 * y + C8 * z, shift);
+
+        ro = max(0, min((int)INV_GAMMA_TAB_SIZE-1, ro));
+        go = max(0, min((int)INV_GAMMA_TAB_SIZE-1, go));
+        bo = max(0, min((int)INV_GAMMA_TAB_SIZE-1, bo));
+
+        const ushort* tab = srgb ? sRGBInvGammaTab_b : linearInvGammaTab_b;
+        ro = tab[ro];
+        go = tab[go];
+        bo = tab[bo];
+    }
+
+    inline void process(v_int32x4  liv, v_int32x4  aiv, v_int32x4  biv,
+                        v_int32x4& bdw, v_int32x4& gdw, v_int32x4& rdw) const
+    {
+        const ushort* tab = srgb ? sRGBInvGammaTab_b : linearInvGammaTab_b;
+        int C0 = coeffs[0], C1 = coeffs[1], C2 = coeffs[2];
+        int C3 = coeffs[3], C4 = coeffs[4], C5 = coeffs[5];
+        int C6 = coeffs[6], C7 = coeffs[7], C8 = coeffs[8];
+
+        v_int32x4 xiv, yiv, ziv;
+
+        /* L = L*BASE/255; // == divConst<14, 255>(L*BASE) */
+        liv = divConst<14, 255>(liv << base_shift);
+
+        /* a = (a - 128)*BASE/256; b = (a - 128)*BASE/256; */
+        aiv = (aiv - v_setall_s32(128)) << (base_shift - 8);
+        biv = (biv - v_setall_s32(128)) << (base_shift - 8);
+
+        v_int32x4 ify;
+        v_int32x4 y_lt, y_gt;
+        v_int32x4 ify_lt, ify_gt;
+
+        // Less-than part
+        /* y = L*100/903.3f; // == divConst<14, 9033>(L*1000); */
+        y_lt = divConst<14, 9033>(liv*v_setall_s32(1000));
+
+        /* //fy = 7.787f * yy + 16.0f / 116.0f;
+            ify = base16_116 + y*8 - divConst<14, 1000>(y*213); */
+        ify_lt = v_setall_s32(base16_116) + (y_lt << 3) - divConst<14, 1000>(y_lt*v_setall_s32(213));
+
+        // Greater-than part
+        /* ify = divConst<20, 116>(L*100) + base16_116; */
+        ify_gt = divConst<20, 116>(liv*v_setall_s32(100)) + v_setall_s32(base16_116);
+
+        /* y = ify*ify/BASE*ify/BASE; */
+        y_gt = (((ify_gt*ify_gt) >> base_shift)*ify_gt) >> base_shift;
+
+        // Combining LT and GT parts
+        /* y, ify = (L <= lThresh) ? ... : ... ; */
+        v_int32x4 mask = liv <= v_setall_s32(lThresh);
+        yiv = v_select(mask, y_lt, y_gt);
+        ify = v_select(mask, ify_lt, ify_gt);
+
+        /*
+            adiv = divConst<24, 500>(a*256);
+            bdiv = divConst<24, 200>(b*256);
+            int ifxz[] = {ify + adiv, ify - bdiv};
+            */
+        v_int32x4 adiv, bdiv;
+        adiv = divConst<24, 500>(aiv << 8);
+        bdiv = divConst<24, 200>(biv << 8);
+
+        /* x = ifxz[0]; y = y; z = ifxz[1]; */
+        xiv = ify + adiv;
+        ziv = ify - bdiv;
+
+        v_int32x4 v_lt, v_gt;
+        // k = 0
+        /* v = (v <= fThresh) ? ... : ... ; */
+        mask = xiv <= v_setall_s32(fThresh);
+
+        // Less-than part
+        /* v = divConst<14, 7787>(v*1000) - BASE*16/116*1000/7787; */
+        v_lt = divConst<14, 7787>(xiv*v_setall_s32(1000)) - v_setall_s32(BASE*16/116*1000/7787);
+
+        // Greater-than part
+        /* v = v*v/BASE*v/BASE; */
+        v_gt = (((xiv*xiv) >> base_shift) * xiv) >> base_shift;
+
+        // Combining LT ang GT parts
+        xiv = v_select(mask, v_lt, v_gt);
+
+        // k = 1: the same as above but for z
+        mask = ziv <= v_setall_s32(fThresh);
+        v_lt = divConst<14, 7787>(ziv*v_setall_s32(1000)) - v_setall_s32(BASE*16/116*1000/7787);
+        v_gt = (((ziv*ziv) >> base_shift) * ziv) >> base_shift;
+        ziv = v_select(mask, v_lt, v_gt);
+
+        /*
+                ro = CV_DESCALE(C0 * x + C1 * y + C2 * z, shift);
+                go = CV_DESCALE(C3 * x + C4 * y + C5 * z, shift);
+                bo = CV_DESCALE(C6 * x + C7 * y + C8 * z, shift);
+        */
+        v_int32x4 descaleShift = v_setall_s32(1 << (shift-1));
+        rdw = (xiv*v_setall_s32(C0) + yiv*v_setall_s32(C1) + ziv*v_setall_s32(C2) + descaleShift) >> shift;
+        gdw = (xiv*v_setall_s32(C3) + yiv*v_setall_s32(C4) + ziv*v_setall_s32(C5) + descaleShift) >> shift;
+        bdw = (xiv*v_setall_s32(C6) + yiv*v_setall_s32(C7) + ziv*v_setall_s32(C8) + descaleShift) >> shift;
+
+        //limit indices in table and then substitute
+        //ro = tab[ro]; go = tab[go]; bo = tab[bo];
+        v_int32x4 tabsz = v_setall_s32((int)INV_GAMMA_TAB_SIZE-1);
+        int32_t CV_DECL_ALIGNED(16) shifts[4];
+        rdw = v_max(v_setzero_s32(), v_min(tabsz, rdw));
+        gdw = v_max(v_setzero_s32(), v_min(tabsz, gdw));
+        bdw = v_max(v_setzero_s32(), v_min(tabsz, bdw));
+
+        v_store_aligned(shifts, rdw);
+        rdw = v_int32x4(tab[shifts[0]], tab[shifts[1]], tab[shifts[2]], tab[shifts[3]]);
+
+        v_store_aligned(shifts, gdw);
+        gdw = v_int32x4(tab[shifts[0]], tab[shifts[1]], tab[shifts[2]], tab[shifts[3]]);
+
+        v_store_aligned(shifts, bdw);
+        bdw = v_int32x4(tab[shifts[0]], tab[shifts[1]], tab[shifts[2]], tab[shifts[3]]);
+    }
     void operator()(const uchar* src, uchar* dst, int n) const
     {
         int i, dcn = dstcn;
         int bIdx = blueIdx;
-        const ushort* tab = srgb ? sRGBInvGammaTab_b : linearInvGammaTab_b;
-        int C0 = coeffs[0], C1 = coeffs[1], C2 = coeffs[2],
-        C3 = coeffs[3], C4 = coeffs[4], C5 = coeffs[5],
-        C6 = coeffs[6], C7 = coeffs[7], C8 = coeffs[8];
         uchar alpha = ColorChannel<uchar>::max();
         i = 0;
-
-        static const int base_shift = 14;
-        static const int BASE = (1 << base_shift);
-        static const int lThresh = 0.008856f * 903.3f * (long long int)BASE/100;
-        static const int fThresh = (7.787f * 0.008856f + 16.0f / 116.0f)*BASE;
-        static const int base16_116 = BASE*16/116 + 1;
-        static const int shift = lab_shift+(base_shift-inv_gamma_shift);
 
         if(enablePacked)
         {
@@ -1354,125 +1518,24 @@ struct Lab2RGBinteger
                 v_expand(savec0, avecs[0], avecs[1]); v_expand(savec1, avecs[2], avecs[3]);
                 v_expand(sbvec0, bvecs[0], bvecs[1]); v_expand(sbvec1, bvecs[2], bvecs[3]);
 
-                v_int32x4 rdw[4], gdw[4], bdw[4];
+                v_int32x4 r_vecs[4], g_vecs[4], b_vecs[4];
 
-                for(int ir = 0; ir < 4; ir++)
-                {
-                    v_int32x4 liv = lvecs[ir], aiv = avecs[ir], biv = bvecs[ir];
-                    v_int32x4 xiv, yiv, ziv;
+                for(int k = 0; k < 4; k++)
+                    process(lvecs[k], avecs[k], bvecs[k], b_vecs[k], g_vecs[k], r_vecs[k]);
 
-                    /* L = L*BASE/255; // == divConst<14, 255>(L*BASE) */
-                    liv = divConst<14, 255>(liv << base_shift);
+                v_int16x8 s_rvec0, s_rvec1, s_gvec0, s_gvec1, s_bvec0, s_bvec1;
+                s_rvec0 = v_pack(r_vecs[0], r_vecs[1]), s_rvec1 = v_pack(r_vecs[2], r_vecs[3]);
+                s_gvec0 = v_pack(g_vecs[0], g_vecs[1]), s_gvec1 = v_pack(g_vecs[2], g_vecs[3]);
+                s_bvec0 = v_pack(b_vecs[0], b_vecs[1]), s_bvec1 = v_pack(b_vecs[2], b_vecs[3]);
 
-                    /* a = (a - 128)*BASE/256; b = (a - 128)*BASE/256; */
-                    aiv = (aiv - v_setall_s32(128)) << (base_shift - 8);
-                    biv = (biv - v_setall_s32(128)) << (base_shift - 8);
+                v_uint16x8 u_rvec0(s_rvec0.val), u_rvec1(s_rvec1.val);
+                v_uint16x8 u_gvec0(s_gvec0.val), u_gvec1(s_gvec1.val);
+                v_uint16x8 u_bvec0(s_bvec0.val), u_bvec1(s_bvec1.val);
 
-                    v_int32x4 ify;
-                    v_int32x4 y_lt, y_gt;
-                    v_int32x4 ify_lt, ify_gt;
-
-                    // Less-than part
-                    /* y = L*100/903.3f; // == divConst<14, 9033>(L*1000); */
-                    y_lt = divConst<14, 9033>(liv*v_setall_s32(1000));
-
-                    /* //fy = 7.787f * yy + 16.0f / 116.0f;
-                        ify = base16_116 + y*8 - divConst<14, 1000>(y*213); */
-                    ify_lt = v_setall_s32(base16_116) + (y_lt << 3) - divConst<14, 1000>(y_lt*v_setall_s32(213));
-
-                    // Greater-than part
-                    /* ify = divConst<20, 116>(L*100) + base16_116; */
-                    ify_gt = divConst<20, 116>(liv*v_setall_s32(100)) + v_setall_s32(base16_116);
-
-                    /* y = ify*ify/BASE*ify/BASE; */
-                    y_gt = (((ify_gt*ify_gt) >> base_shift)*ify_gt) >> base_shift;
-
-                    // Combining LT and GT parts
-                    /* y, ify = (L <= lThresh) ? ... : ... ; */
-                    v_int32x4 mask = liv <= v_setall_s32(lThresh);
-                    yiv = v_select(mask, y_lt, y_gt);
-                    ify = v_select(mask, ify_lt, ify_gt);
-
-                    /*
-                        adiv = divConst<24, 500>(a*256);
-                        bdiv = divConst<24, 200>(b*256);
-                        int ifxz[] = {ify + adiv, ify - bdiv};
-                        */
-                    v_int32x4 adiv, bdiv;
-                    adiv = divConst<24, 500>(aiv << 8);
-                    bdiv = divConst<24, 200>(biv << 8);
-
-                    /* x = ifxz[0]; y = y; z = ifxz[1]; */
-                    xiv = ify + adiv;
-                    ziv = ify - bdiv;
-
-                    v_int32x4 v_lt, v_gt;
-                    // k = 0
-                    /* v = (v <= fThresh) ? ... : ... ; */
-                    mask = xiv <= v_setall_s32(fThresh);
-
-                    // Less-than part
-                    /* v = divConst<14, 7787>(v*1000) - BASE*16/116*1000/7787; */
-                    v_lt = divConst<14, 7787>(xiv*v_setall_s32(1000)) - v_setall_s32(BASE*16/116*1000/7787);
-
-                    // Greater-than part
-                    /* v = v*v/BASE*v/BASE; */
-                    v_gt = (((xiv*xiv) >> base_shift) * xiv) >> base_shift;
-
-                    // Combining LT ang GT parts
-                    xiv = v_select(mask, v_lt, v_gt);
-
-                    // k = 1: the same as above but for z
-                    mask = ziv <= v_setall_s32(fThresh);
-                    v_lt = divConst<14, 7787>(ziv*v_setall_s32(1000)) - v_setall_s32(BASE*16/116*1000/7787);
-                    v_gt = (((ziv*ziv) >> base_shift) * ziv) >> base_shift;
-                    ziv = v_select(mask, v_lt, v_gt);
-
-                    /*
-                            ro = CV_DESCALE(C0 * x + C1 * y + C2 * z, shift);
-                            go = CV_DESCALE(C3 * x + C4 * y + C5 * z, shift);
-                            bo = CV_DESCALE(C6 * x + C7 * y + C8 * z, shift);
-                            descale is done later
-                    */
-                    rdw[ir] = xiv*v_setall_s32(C0) + yiv*v_setall_s32(C1) + ziv*v_setall_s32(C2);
-                    gdw[ir] = xiv*v_setall_s32(C3) + yiv*v_setall_s32(C4) + ziv*v_setall_s32(C5);
-                    bdw[ir] = xiv*v_setall_s32(C6) + yiv*v_setall_s32(C7) + ziv*v_setall_s32(C8);
-                }
-
-                v_int16x8 r_vec0s, r_vec1s, g_vec0s, g_vec1s, b_vec0s, b_vec1s;
-                //descale is done here
-                r_vec0s = v_rshr_pack<shift>(rdw[0], rdw[1]); r_vec1s = v_rshr_pack<shift>(rdw[2], rdw[3]);
-                g_vec0s = v_rshr_pack<shift>(gdw[0], gdw[1]); g_vec1s = v_rshr_pack<shift>(gdw[2], gdw[3]);
-                b_vec0s = v_rshr_pack<shift>(bdw[0], bdw[1]); b_vec1s = v_rshr_pack<shift>(bdw[2], bdw[3]);
-
-                //limit indices in table
-                v_int16x8 tabsz = v_setall_s16((int)INV_GAMMA_TAB_SIZE-1);
-                #define CLAMP(r) (r) = v_max(v_setzero_s16(), v_min((r), tabsz))
-                CLAMP(r_vec0s); CLAMP(r_vec1s);
-                CLAMP(g_vec0s); CLAMP(g_vec1s);
-                CLAMP(b_vec0s); CLAMP(b_vec1s);
-                #undef CLAMP
-
-                v_uint16x8 r_vec0(r_vec0s.val), r_vec1(r_vec1s.val);
-                v_uint16x8 g_vec0(g_vec0s.val), g_vec1(g_vec1s.val);
-                v_uint16x8 b_vec0(b_vec0s.val), b_vec1(b_vec1s.val);
-
-                //ro = tab[ro]; go = tab[go]; bo = tab[bo];
-                uint16_t CV_DECL_ALIGNED(16) shifts[8];
-                #define GAMMA_TAB_SUBST(reg) \
-                    v_store_aligned(shifts, (reg));\
-                    (reg) = v_uint16x8(tab[shifts[0]], tab[shifts[1]], tab[shifts[2]], tab[shifts[3]],\
-                                       tab[shifts[4]], tab[shifts[5]], tab[shifts[6]], tab[shifts[7]])
-
-                GAMMA_TAB_SUBST(r_vec0); GAMMA_TAB_SUBST(r_vec1);
-                GAMMA_TAB_SUBST(g_vec0); GAMMA_TAB_SUBST(g_vec1);
-                GAMMA_TAB_SUBST(b_vec0); GAMMA_TAB_SUBST(b_vec1);
-
-                #undef GAMMA_TAB_SUBST
-
-                v_uint8x16 u8_b = v_pack(b_vec0, b_vec1);
-                v_uint8x16 u8_g = v_pack(g_vec0, g_vec1);
-                v_uint8x16 u8_r = v_pack(r_vec0, r_vec1);
+                v_uint8x16 u8_b, u8_g, u8_r;
+                u8_b = v_pack(u_bvec0, u_bvec1);
+                u8_g = v_pack(u_gvec0, u_gvec1);
+                u8_r = v_pack(u_rvec0, u_rvec1);
 
                 v_uint8x16 dummy;
                 if(bIdx == 0)
@@ -1493,68 +1556,16 @@ struct Lab2RGBinteger
 
         for (; i < n*3; i += 3, dst += dcn)
         {
-            int ro, go, bo, x, y, z;
+            int ro, go, bo;
             int L = src[i + 0]*BASE/255;
             int a = (src[i + 1] - 128)*BASE/256;
             int b = (src[i + 2] - 128)*BASE/256;
 
-            int ify;
-            if(L <= lThresh)
-            {
-                //yy = li / 903.3f;
-                //y = L*100/903.3f;
-                y = divConst<14, 9033>(L*1000);
-
-                //fy = 7.787f * yy + 16.0f / 116.0f;
-                ify = base16_116 + y*8 - y*213/1000;
-            }
-            else
-            {
-                //fy = (li + 16.0f) / 116.0f;
-                ify = L*100/116 + base16_116;
-
-                //yy = fy * fy * fy;
-                y = ify*ify/BASE*ify/BASE;
-            }
-
-            //float fxz[] = { ai / 500.0f + fy, fy - bi / 200.0f };
-            int adiv, bdiv;
-            //adiv = a*256/500, bdiv = b*256/200;
-            adiv = divConst<24, 500>(a*256);
-            bdiv = divConst<24, 200>(b*256);
-
-            int ifxz[] = {ify + adiv, ify - bdiv};
-            for(int k = 0; k < 2; k++)
-            {
-                int& v = ifxz[k];
-                if(v <= fThresh)
-                {
-                    //fxz[k] = (fxz[k] - 16.0f / 116.0f) / 7.787f;
-                    v = v*1000/7787 - BASE*16/116*1000/7787;
-                }
-                else
-                {
-                    //fxz[k] = fxz[k] * fxz[k] * fxz[k];
-                    v = v*v/BASE*v/BASE;
-                }
-            }
-            x = ifxz[0]; y = y; z = ifxz[1];
-
-            ro = CV_DESCALE(C0 * x + C1 * y + C2 * z, shift);
-            go = CV_DESCALE(C3 * x + C4 * y + C5 * z, shift);
-            bo = CV_DESCALE(C6 * x + C7 * y + C8 * z, shift);
-
-            ro = max(0, min((int)INV_GAMMA_TAB_SIZE-1, ro));
-            go = max(0, min((int)INV_GAMMA_TAB_SIZE-1, go));
-            bo = max(0, min((int)INV_GAMMA_TAB_SIZE-1, bo));
-
-            ro = tab[ro];
-            go = tab[go];
-            bo = tab[bo];
+            process(L, a, b, ro, go, bo);
 
             dst[bIdx^2] = saturate_cast<uchar>(bo);
-            dst[1] = saturate_cast<uchar>(go);
-            dst[bIdx] = saturate_cast<uchar>(ro);
+            dst[1]      = saturate_cast<uchar>(go);
+            dst[bIdx]   = saturate_cast<uchar>(ro);
             if( dcn == 4 )
                 dst[3] = alpha;
         }
@@ -1984,7 +1995,7 @@ TEST(ImgProc_Color, LabCheckWorking)
     cv::setUseOptimized(false);
 
     //settings
-    #define INT_DATA 0
+    #define INT_DATA 1
     #define TO_BGR 1
     const bool randomFill = true;
 
