@@ -94,6 +94,7 @@
 #include "opencl_kernels_imgproc.hpp"
 #include <limits>
 #include "hal_replacement.hpp"
+#include "opencv2/core/hal/intrin.hpp"
 
 #define  CV_DESCALE(x,n)     (((x) + (1 << ((n)-1))) >> (n))
 
@@ -138,6 +139,8 @@ const int CB2GI = -5636;
 const int CR2GI = -11698;
 const int CR2RI = 22987;
 
+static const double _1_3 = 0.333333333333;
+const static float _1_3f = static_cast<float>(_1_3);
 
 // computes cubic spline coefficients for a function: (xi=i, yi=f[i]), i=0..n
 template<typename _Tp> static void splineBuild(const _Tp* f, int n, _Tp* tab)
@@ -5781,7 +5784,6 @@ struct HLS2RGB_b
     #endif
 };
 
-
 ///////////////////////////////////// RGB <-> L*a*b* /////////////////////////////////////
 
 static const float D65[] = { 0.950456f, 1.f, 1.088754f };
@@ -5794,6 +5796,8 @@ static float sRGBGammaTab[GAMMA_TAB_SIZE*4], sRGBInvGammaTab[GAMMA_TAB_SIZE*4];
 static const float GammaTabScale = (float)GAMMA_TAB_SIZE;
 
 static ushort sRGBGammaTab_b[256], linearGammaTab_b[256];
+enum { inv_gamma_shift = 12, INV_GAMMA_TAB_SIZE = (1 << inv_gamma_shift) };
+static ushort sRGBInvGammaTab_b[INV_GAMMA_TAB_SIZE], linearInvGammaTab_b[INV_GAMMA_TAB_SIZE];
 #undef lab_shift
 #define lab_shift xyz_shift
 #define gamma_shift 3
@@ -5801,16 +5805,120 @@ static ushort sRGBGammaTab_b[256], linearGammaTab_b[256];
 #define LAB_CBRT_TAB_SIZE_B (256*3/2*(1<<gamma_shift))
 static ushort LabCbrtTab_b[LAB_CBRT_TAB_SIZE_B];
 
-static const bool enableTetraInterpolation = true;
+static bool enableBitExactness = true;
+static bool enablePackedLab = true;
 enum
 {
-    lab_lut_shift = 6,
+    lab_lut_shift = 5,
     LAB_LUT_DIM = (1 << lab_lut_shift)+1,
     lab_base_shift = 14,
     LAB_BASE = (1 << lab_base_shift),
+    trilinear_shift = 8 - lab_lut_shift + 1,
+    TRILINEAR_BASE = (1 << trilinear_shift)
 };
-static int Lab2RGBLUT[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3];
-static int RGB2LabLUT[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3];
+static int16_t RGB2LabLUT_s16[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3*8];
+static int16_t trilinearLUT[TRILINEAR_BASE*TRILINEAR_BASE*TRILINEAR_BASE*8];
+
+//v*16384/255 ~~ v*16384/256 + v/4 if v in [0; 255]
+static inline void div255(v_uint16x8& reg)
+{
+    reg = (reg << (lab_base_shift - 8)) + (reg >> 2);
+}
+
+template <uint v>
+struct SignificantBits
+{
+    static const uint bits = SignificantBits<(v >> 1)>::bits + 1;
+};
+
+template <>
+struct SignificantBits<0>
+{
+    static const uint bits = 0;
+};
+
+template<int w, long long int d>
+static inline int divConst(int v)
+{
+    const int b = SignificantBits<d>::bits - 1;
+    const int r = w + b;
+    const int pmod = (1l << r)%d;
+    const int f = (1l << r)/d;
+    long long int vl = v;
+    if(pmod)
+    {
+        if(pmod*2 > d)
+        {
+            vl = (vl * (f + 1) + (1l << (r - 1))) >> r;
+        }
+        else
+        {
+            vl = ((vl + 1) * f + (1l << (r - 1))) >> r;
+        }
+    }
+    else
+    {
+        vl = (vl + (1l << (b - 1))) >> b;
+    }
+    return (int)vl;
+}
+
+template<int w, long long int d>
+static inline v_int32x4 divConst(v_int32x4 v)
+{
+    const int b = SignificantBits<d>::bits - 1;
+    const int r = w + b;
+    const int pmod = (1l << r)%d;
+    const int f = (1l << r)/d;
+    // v_mul_expand doesn't support signed int32 args
+    v_int64x2 v0, v1;
+    v_uint64x2 uv0, uv1;
+    v_uint32x4 av = v_abs(v);
+    v_int32x4 mask = v < v_setzero_s32();
+    v_int64x2 nv0, nv1;
+    v_int32x4 negOut;
+    v_int32x4 out;
+    if(pmod)
+    {
+        v_uint32x4 fp1;
+        v_int64x2 adc;
+        if(pmod*2 > d)
+        {
+            fp1 = v_setall_u32(f + 1);
+            adc = v_setall_s64(1l << (r - 1));
+        }
+        else
+        {
+            fp1 = v_setall_u32(f);
+            adc = v_setall_s64(f + (1l << (r - 1)));
+        }
+
+        v_mul_expand(av, fp1, uv0, uv1);
+        v0.val = uv0.val, v1.val = uv1.val;
+
+        nv0 = v_setzero_s64() - v0;
+        nv1 = v_setzero_s64() - v1;
+
+        v0 = (v0 + adc) >> r;
+        v1 = (v1 + adc) >> r;
+        out = v_pack(v0, v1);
+
+        nv0 = (nv0 + adc) >> r;
+        nv1 = (nv1 + adc) >> r;
+        negOut = v_pack(nv0, nv1);
+
+        out = v_select(mask, negOut, out);
+    }
+    else
+    {
+        v_int64x2 adc = v_setall_s64(1l << (r - 1));
+        v_expand(v, v0, v1);
+        v0 = (v0 + adc) >> b;
+        v1 = (v1 + adc) >> b;
+        out = v_pack(v0, v1);
+    }
+    return out;
+}
 
 #define clip(value) \
     value < 0.0f ? 0.0f : value > 1.0f ? 1.0f : value;
@@ -5825,6 +5933,7 @@ static inline float applyInvGamma(float x)
     return x <= 0.0031308 ? x*12.92f : (float)(1.055*std::pow((double)x, 1./2.4) - 0.055);
 }
 
+//TODO: these calculations should be bit-exact
 static void initLabTabs()
 {
     static bool initialized = false;
@@ -5852,8 +5961,15 @@ static void initLabTabs()
         for(i = 0; i < 256; i++)
         {
             float x = i*(1.f/255.f);
-            sRGBGammaTab_b[i] = saturate_cast<ushort>(255.f*(1 << gamma_shift)*(x <= 0.04045f ? x*(1.f/12.92f) : (float)std::pow((double)(x + 0.055)*(1./1.055), 2.4)));
+            sRGBGammaTab_b[i] = saturate_cast<ushort>(255.f*(1 << gamma_shift)*applyGamma(x));
             linearGammaTab_b[i] = (ushort)(i*(1 << gamma_shift));
+        }
+        float invScale = 1.f/INV_GAMMA_TAB_SIZE;
+        for(i = 0; i < INV_GAMMA_TAB_SIZE; i++)
+        {
+            float x = i*invScale;
+            sRGBInvGammaTab_b[i] = saturate_cast<ushort>(255.f*applyInvGamma(x));
+            linearInvGammaTab_b[i] = (ushort)(255.f*x);
         }
 
         for(i = 0; i < LAB_CBRT_TAB_SIZE_B; i++)
@@ -5862,26 +5978,12 @@ static void initLabTabs()
             LabCbrtTab_b[i] = saturate_cast<ushort>((1 << lab_shift2)*(x < 0.008856f ? x*7.787f + 0.13793103448275862f : cvCbrt(x)));
         }
 
-        if(enableTetraInterpolation)
+        if(enableBitExactness)
         {
-            static const float lThresh = 0.008856f * 903.3f;
-            static const float fThresh = 7.787f * 0.008856f + 16.0f / 116.0f;
-            static const float _1_3 = 1.0f / 3.0f;
             static const float _a = 16.0f / 116.0f;
 
             const float* _whitept = D65;
             float coeffs[9];
-
-            //Lab2RGB coeffs
-            for(i = 0; i < 3; i++ )
-            {
-                coeffs[i+2*3] = XYZ2sRGB_D65[i]*_whitept[i];
-                coeffs[i+1*3] = XYZ2sRGB_D65[i+3]*_whitept[i];
-                coeffs[i+0*3] = XYZ2sRGB_D65[i+6]*_whitept[i];
-            }
-            float C0 = coeffs[0], C1 = coeffs[1], C2 = coeffs[2],
-                  C3 = coeffs[3], C4 = coeffs[4], C5 = coeffs[5],
-                  C6 = coeffs[6], C7 = coeffs[7], C8 = coeffs[8];
 
             //RGB2Lab coeffs
             float scaleWhite[] = { 1.0f / _whitept[0], 1.0f, 1.0f / _whitept[2] };
@@ -5898,54 +6000,14 @@ static void initLabTabs()
                   D3 = coeffs[3], D4 = coeffs[4], D5 = coeffs[5],
                   D6 = coeffs[6], D7 = coeffs[7], D8 = coeffs[8];
 
+            AutoBuffer<int16_t> RGB2Labprev(LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3);
+
             for(int p = 0; p < LAB_LUT_DIM; p++)
             {
                 for(int q = 0; q < LAB_LUT_DIM; q++)
                 {
                     for(int r = 0; r < LAB_LUT_DIM; r++)
                     {
-                        //Lab 2 RGB LUTs building
-                        float li = 100.0*p/(LAB_LUT_DIM-1);
-                        float ai = 256.0*q/(LAB_LUT_DIM-1) - 128.0;
-                        float bi = 256.0*r/(LAB_LUT_DIM-1) - 128.0;
-
-                        float y, fy;
-                        if (li <= lThresh)
-                        {
-                            y = li / 903.3f;
-                            fy = 7.787f * y + 16.0f / 116.0f;
-                        }
-                        else
-                        {
-                            fy = (li + 16.0f) / 116.0f;
-                            y = fy * fy * fy;
-                        }
-
-                        float fxz[] = { ai / 500.0f + fy, fy - bi / 200.0f };
-
-                        for (int j = 0; j < 2; j++)
-                            if (fxz[j] <= fThresh)
-                                fxz[j] = (fxz[j] - 16.0f / 116.0f) / 7.787f;
-                            else
-                                fxz[j] = fxz[j] * fxz[j] * fxz[j];
-
-                        float x = fxz[0], z = fxz[1];
-
-                        float ro = C0 * x + C1 * y + C2 * z;
-                        float go = C3 * x + C4 * y + C5 * z;
-                        float bo = C6 * x + C7 * y + C8 * z;
-                        ro = clip(ro);
-                        go = clip(go);
-                        bo = clip(bo);
-
-                        ro = applyInvGamma(ro);
-                        go = applyInvGamma(go);
-                        bo = applyInvGamma(bo);
-
-                        Lab2RGBLUT[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r]     = cvRound(LAB_BASE*ro);
-                        Lab2RGBLUT[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 1] = cvRound(LAB_BASE*go);
-                        Lab2RGBLUT[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 2] = cvRound(LAB_BASE*bo);
-
                         //RGB 2 Lab LUT building
                         float R = 1.0*p/(LAB_LUT_DIM-1);
                         float G = 1.0*q/(LAB_LUT_DIM-1);
@@ -5959,155 +6021,191 @@ static void initLabTabs()
                         float Y = R*D3 + G*D4 + B*D5;
                         float Z = R*D6 + G*D7 + B*D8;
 
-                        float FX = X > 0.008856f ? std::pow(X, _1_3) : (7.787f * X + _a);
-                        float FY = Y > 0.008856f ? std::pow(Y, _1_3) : (7.787f * Y + _a);
-                        float FZ = Z > 0.008856f ? std::pow(Z, _1_3) : (7.787f * Z + _a);
+                        float FX = X > 0.008856f ? std::pow(X, _1_3f) : (7.787f * X + _a);
+                        float FY = Y > 0.008856f ? std::pow(Y, _1_3f) : (7.787f * Y + _a);
+                        float FZ = Z > 0.008856f ? std::pow(Z, _1_3f) : (7.787f * Z + _a);
 
                         float L = Y > 0.008856f ? (116.f * FY - 16.f) : (903.3f * Y);
                         float a = 500.f * (FX - FY);
                         float b = 200.f * (FY - FZ);
 
-                        RGB2LabLUT[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r]     = cvRound(LAB_BASE*L/100.0f);
-                        RGB2LabLUT[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 1] = cvRound(LAB_BASE*(a+128.0f)/256.0f);
-                        RGB2LabLUT[3*p + 3*LAB_LUT_DIM*q + 3*LAB_LUT_DIM*LAB_LUT_DIM*r + 2] = cvRound(LAB_BASE*(b+128.0f)/256.0f);
+                        int idx = p*3 + q*LAB_LUT_DIM*3 + r*LAB_LUT_DIM*LAB_LUT_DIM*3;
+                        RGB2Labprev[idx]   = cvRound(LAB_BASE*L/100.0f);
+                        RGB2Labprev[idx+1] = cvRound(LAB_BASE*(a+128.0f)/256.0f);
+                        RGB2Labprev[idx+2] = cvRound(LAB_BASE*(b+128.0f)/256.0f);
+                    }
+                }
+            }
+            for(int p = 0; p < LAB_LUT_DIM; p++)
+            {
+                for(int q = 0; q < LAB_LUT_DIM; q++)
+                {
+                    for(int r = 0; r < LAB_LUT_DIM; r++)
+                    {
+                        #define FILL(_p, _q, _r) \
+                        do {\
+                            int idxold = (p+(_p))*3 + (q+(_q))*LAB_LUT_DIM*3 + (r+(_r))*LAB_LUT_DIM*LAB_LUT_DIM*3;\
+                            int idxnew = p*3*8 + q*LAB_LUT_DIM*3*8 + r*LAB_LUT_DIM*LAB_LUT_DIM*3*8+4*(_p)+2*(_q)+(_r);\
+                            RGB2LabLUT_s16[idxnew]    = RGB2Labprev[idxold];\
+                            RGB2LabLUT_s16[idxnew+8]  = RGB2Labprev[idxold+1];\
+                            RGB2LabLUT_s16[idxnew+16] = RGB2Labprev[idxold+2];\
+                        } while(0)
+
+                        FILL(0, 0, 0); FILL(0, 0, 1);
+                        FILL(0, 1, 0); FILL(0, 1, 1);
+                        FILL(1, 0, 0); FILL(1, 0, 1);
+                        FILL(1, 1, 0); FILL(1, 1, 1);
+
+                        #undef FILL
+                    }
+                }
+            }
+
+            for(int p = 0; p < TRILINEAR_BASE; p++)
+            {
+                int16_t pp = TRILINEAR_BASE - p;
+                for(int q = 0; q < TRILINEAR_BASE; q++)
+                {
+                    int16_t qq = TRILINEAR_BASE - q;
+                    for(int r = 0; r < TRILINEAR_BASE; r++)
+                    {
+                        int16_t rr = TRILINEAR_BASE - r;
+                        int16_t* w = &trilinearLUT[8*p + 8*TRILINEAR_BASE*q + 8*TRILINEAR_BASE*TRILINEAR_BASE*r];
+                        w[0]  = pp * qq * rr; w[1]  = pp * qq * r ; w[2]  = pp * q  * rr; w[3]  = pp * q  * r ;
+                        w[4]  = p  * qq * rr; w[5]  = p  * qq * r ; w[6]  = p  * q  * rr; w[7]  = p  * q  * r ;
                     }
                 }
             }
         }
+
         initialized = true;
     }
 }
 
 
-/* The idea is taken from the article:
- * Performing color space conversions with three-dimensional linear interpolation
- * by James M. Kasson, Sigfredo I. Nm, Wil Plouffe, James L. Hafner
- * Journal of Electronic Imaging 4(3), 226—250 (July 1995).
- */
-static inline void tetraInterpolate(int cx, int cy, int cz, int* LUT,
-                                    int& a, int& b, int& c)
+// cx, cy, cz are in [0; LAB_BASE]
+static inline void trilinearInterpolate(int cx, int cy, int cz, int16_t* LUT,
+                                        int& a, int& b, int& c)
 {
-    cx = (cx >= 0) ? (cx <= LAB_BASE ? cx : LAB_BASE) : 0;
-    cy = (cy >= 0) ? (cy <= LAB_BASE ? cy : LAB_BASE) : 0;
-    cz = (cz >= 0) ? (cz <= LAB_BASE ? cz : LAB_BASE) : 0;
-
     //LUT idx of origin pt of cube
     int tx = cx >> (lab_base_shift - lab_lut_shift);
     int ty = cy >> (lab_base_shift - lab_lut_shift);
     int tz = cz >> (lab_base_shift - lab_lut_shift);
 
-    //x, y, z are [0; LAB_BASE)
-    int x = (cx - (tx << (lab_base_shift - lab_lut_shift))) << lab_lut_shift;
-    int y = (cy - (ty << (lab_base_shift - lab_lut_shift))) << lab_lut_shift;
-    int z = (cz - (tz << (lab_base_shift - lab_lut_shift))) << lab_lut_shift;
-
-#define SETPT(n, _x, _y, _z) \
-    do\
-        if(w##n)\
-        {\
-            (a##n) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z))];\
-            (b##n) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 1];\
-            (c##n) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 2];\
-        }\
-    while(0)
-
-    int w0, w1, w2, w3;
-    int a0, a1, a2, a3, b0, b1, b2, b3, c0, c1, c2, c3;
-
-    if(x > y)
+    int16_t* baseLUT = &LUT[3*8*tx + (3*8*LAB_LUT_DIM)*ty + (3*8*LAB_LUT_DIM*LAB_LUT_DIM)*tz];
+    int aa[8], bb[8], cc[8];
+    for(int i = 0; i < 8; i++)
     {
-        if(y > z)
-        {
-            w0 = LAB_BASE - x; w1 = x - y; w2 = y - z; w3 = z;
-            SETPT(1, 1, 0, 0);
-            SETPT(2, 1, 1, 0);
-        }
-        else if(x > z)
-        {
-            w0 = LAB_BASE - x; w1 = x - z; w2 = z - y; w3 = y;
-            SETPT(1, 1, 0, 0);
-            SETPT(2, 1, 0, 1);
-        }
-        else
-        {
-            w0 = LAB_BASE - z; w1 = z - x; w2 = x - y; w3 = y;
-            SETPT(1, 0, 0, 1);
-            SETPT(2, 1, 0, 1);
-        }
-    }
-    else
-    {
-        if(y > z)
-        {
-            if(x > z)
-            {
-                w0 = LAB_BASE - y; w1 = y - x; w2 = x - z; w3 = z;
-                SETPT(1, 0, 1, 0);
-                SETPT(2, 1, 1, 0);
-            }
-            else
-            {
-                w0 = LAB_BASE - y; w1 = y - z; w2 = z - x; w3 = x;
-                SETPT(1, 0, 1, 0);
-                SETPT(2, 0, 1, 1);
-            }
-        }
-        else
-        {
-            w0 = LAB_BASE - z; w1 = z - y; w2 = y - x; w3 = x;
-            SETPT(1, 0, 0, 1);
-            SETPT(2, 0, 1, 1);
-        }
+        aa[i] = baseLUT[i]; bb[i] = baseLUT[i+8]; cc[i] = baseLUT[i+16];
     }
 
-    SETPT(0, 0, 0, 0);
-    SETPT(3, 1, 1, 1);
+    //x, y, z are [0; TRILINEAR_BASE)
+    static const int bitMask = (1 << trilinear_shift) - 1;
+    int x = (cx >> (lab_base_shift - 8 - 1)) & bitMask;
+    int y = (cy >> (lab_base_shift - 8 - 1)) & bitMask;
+    int z = (cz >> (lab_base_shift - 8 - 1)) & bitMask;
 
-#undef SETPT
+    int w[8];
+    for(int i = 0; i < 8; i++)
+    {
+        w[i] = trilinearLUT[8*x + 8*TRILINEAR_BASE*y + 8*TRILINEAR_BASE*TRILINEAR_BASE*z + i];
+    }
 
-    a = CV_DESCALE(a0*w0 + a1*w1 + a2*w2 + a3*w3, lab_base_shift);
-    b = CV_DESCALE(b0*w0 + b1*w1 + b2*w2 + b3*w3, lab_base_shift);
-    c = CV_DESCALE(c0*w0 + c1*w1 + c2*w2 + c3*w3, lab_base_shift);
+    a = aa[0]*w[0]+aa[1]*w[1]+aa[2]*w[2]+aa[3]*w[3]+aa[4]*w[4]+aa[5]*w[5]+aa[6]*w[6]+aa[7]*w[7];
+    b = bb[0]*w[0]+bb[1]*w[1]+bb[2]*w[2]+bb[3]*w[3]+bb[4]*w[4]+bb[5]*w[5]+bb[6]*w[6]+bb[7]*w[7];
+    c = cc[0]*w[0]+cc[1]*w[1]+cc[2]*w[2]+cc[3]*w[3]+cc[4]*w[4]+cc[5]*w[5]+cc[6]*w[6]+cc[7]*w[7];
+
+    a = CV_DESCALE(a, trilinear_shift*3);
+    b = CV_DESCALE(b, trilinear_shift*3);
+    c = CV_DESCALE(c, trilinear_shift*3);
 }
 
 
-static inline void noInterpolate(int cx, int cy, int cz, int* LUT,
-                                 int& a, int& b, int& c)
+// 8 inValues are in [0; LAB_BASE]
+static inline void trilinearPackedInterpolate(const v_uint16x8 inX, const v_uint16x8 inY, const v_uint16x8 inZ,
+                                              const int16_t* LUT,
+                                              v_uint16x8& outA, v_uint16x8& outB, v_uint16x8& outC)
 {
-    cx = (cx >= 0) ? (cx <= LAB_BASE ? cx : LAB_BASE) : 0;
-    cy = (cy >= 0) ? (cy <= LAB_BASE ? cy : LAB_BASE) : 0;
-    cz = (cz >= 0) ? (cz <= LAB_BASE ? cz : LAB_BASE) : 0;
-
     //LUT idx of origin pt of cube
-    int tx = cx >> (lab_base_shift - lab_lut_shift);
-    int ty = cy >> (lab_base_shift - lab_lut_shift);
-    int tz = cz >> (lab_base_shift - lab_lut_shift);
+    v_uint16x8 idxsX = inX >> (lab_base_shift - lab_lut_shift);
+    v_uint16x8 idxsY = inY >> (lab_base_shift - lab_lut_shift);
+    v_uint16x8 idxsZ = inZ >> (lab_base_shift - lab_lut_shift);
 
-    //x, y, z are [0; LAB_BASE)
-    int x = (cx - (tx << (lab_base_shift - lab_lut_shift))) << lab_lut_shift;
-    int y = (cy - (ty << (lab_base_shift - lab_lut_shift))) << lab_lut_shift;
-    int z = (cz - (tz << (lab_base_shift - lab_lut_shift))) << lab_lut_shift;
+    //x, y, z are [0; TRILINEAR_BASE)
+    const uint16_t bitMask = (1 << trilinear_shift) - 1;
+    v_uint16x8 bitMaskReg = v_setall_u16(bitMask);
+    v_uint16x8 fracX = (inX >> (lab_base_shift - 8 - 1)) & bitMaskReg;
+    v_uint16x8 fracY = (inY >> (lab_base_shift - 8 - 1)) & bitMaskReg;
+    v_uint16x8 fracZ = (inZ >> (lab_base_shift - 8 - 1)) & bitMaskReg;
 
-#define SETPT(n, _x, _y, _z) \
-    do\
-        if(w##n)\
-        {\
-            (a##n) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z))];\
-            (b##n) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 1];\
-            (c##n) = LUT[3*(tx+(_x)) + 3*LAB_LUT_DIM*(ty+(_y)) + 3*LAB_LUT_DIM*LAB_LUT_DIM*(tz+(_z)) + 2];\
-        }\
-    while(0)
+    //load values to interpolate for pix0, pix1, .., pix7
+    v_int16x8 a0, a1, a2, a3, a4, a5, a6, a7;
+    v_int16x8 b0, b1, b2, b3, b4, b5, b6, b7;
+    v_int16x8 c0, c1, c2, c3, c4, c5, c6, c7;
 
-    int w0 = 1, w1, w2, w3;
-    int a0, a1, a2, a3, b0, b1, b2, b3, c0, c1, c2, c3;
+    v_uint32x4 addrDw0, addrDw1, addrDw10, addrDw11;
+    v_mul_expand(v_setall_u16(3*8), idxsX, addrDw0, addrDw1);
+    v_mul_expand(v_setall_u16(3*8*LAB_LUT_DIM), idxsY, addrDw10, addrDw11);
+    addrDw0 += addrDw10; addrDw1 += addrDw11;
+    v_mul_expand(v_setall_u16(3*8*LAB_LUT_DIM*LAB_LUT_DIM), idxsZ, addrDw10, addrDw11);
+    addrDw0 += addrDw10; addrDw1 += addrDw11;
 
-    SETPT(0, 0, 0, 0);
+    uint32_t CV_DECL_ALIGNED(16) addrofs[8];
+    v_store_aligned(addrofs, addrDw0);
+    v_store_aligned(addrofs + 4, addrDw1);
 
-#undef SETPT
+    const int16_t* ptr;
+#define LOAD_ABC(n) ptr = LUT + addrofs[n]; a##n = v_load(ptr); b##n = v_load(ptr + 8); c##n = v_load(ptr + 16)
+    LOAD_ABC(0);
+    LOAD_ABC(1);
+    LOAD_ABC(2);
+    LOAD_ABC(3);
+    LOAD_ABC(4);
+    LOAD_ABC(5);
+    LOAD_ABC(6);
+    LOAD_ABC(7);
+#undef LOAD_ABC
 
-    a = a0;
-    b = b0;
-    c = c0;
+    //interpolation weights for pix0, pix1, .., pix7
+    v_int16x8 w0, w1, w2, w3, w4, w5, w6, w7;
+    v_mul_expand(v_setall_u16(8), fracX, addrDw0, addrDw1);
+    v_mul_expand(v_setall_u16(8*TRILINEAR_BASE), fracY, addrDw10, addrDw11);
+    addrDw0 += addrDw10; addrDw1 += addrDw11;
+    v_mul_expand(v_setall_u16(8*TRILINEAR_BASE*TRILINEAR_BASE), fracZ, addrDw10, addrDw11);
+    addrDw0 += addrDw10; addrDw1 += addrDw11;
+
+    v_store_aligned(addrofs, addrDw0);
+    v_store_aligned(addrofs + 4, addrDw1);
+
+#define LOAD_W(n) ptr = trilinearLUT + addrofs[n]; w##n = v_load(ptr)
+    LOAD_W(0);
+    LOAD_W(1);
+    LOAD_W(2);
+    LOAD_W(3);
+    LOAD_W(4);
+    LOAD_W(5);
+    LOAD_W(6);
+    LOAD_W(7);
+#undef LOAD_W
+
+    //outA = descale(v_reg<8>(sum(dot(ai, wi))))
+    v_uint32x4 part0, part1;
+#define DOT_SHIFT_PACK(l, ll) \
+    part0 = v_uint32x4(v_reduce_sum(v_dotprod(l##0, w0)),\
+                       v_reduce_sum(v_dotprod(l##1, w1)),\
+                       v_reduce_sum(v_dotprod(l##2, w2)),\
+                       v_reduce_sum(v_dotprod(l##3, w3)));\
+    part1 = v_uint32x4(v_reduce_sum(v_dotprod(l##4, w4)),\
+                       v_reduce_sum(v_dotprod(l##5, w5)),\
+                       v_reduce_sum(v_dotprod(l##6, w6)),\
+                       v_reduce_sum(v_dotprod(l##7, w7)));\
+    (ll) = v_rshr_pack<trilinear_shift*3>(part0, part1)
+
+    DOT_SHIFT_PACK(a, outA);
+    DOT_SHIFT_PACK(b, outB);
+    DOT_SHIFT_PACK(c, outC);
+
+#undef DOT_SHIFT_PACK
 }
 
 
@@ -6127,6 +6225,7 @@ struct RGB2Lab_b
         if (!_whitept)
             _whitept = D65;
 
+        //TODO: these things should be bit-exact
         float scale[] =
         {
             (1 << lab_shift)/_whitept[0],
@@ -6134,6 +6233,7 @@ struct RGB2Lab_b
             (1 << lab_shift)/_whitept[2]
         };
 
+        //TODO: and these ones too
         for( int i = 0; i < _3; i++ )
         {
             coeffs[i*3+(blueIdx^2)] = cvRound(_coeffs[i*3]*scale[i]);
@@ -6156,7 +6256,8 @@ struct RGB2Lab_b
             C6 = coeffs[6], C7 = coeffs[7], C8 = coeffs[8];
         n *= 3;
 
-        for( i = 0; i < n; i += 3, src += scn )
+        i = 0;
+        for(; i < n; i += 3, src += scn )
         {
             int R = tab[src[0]], G = tab[src[1]], B = tab[src[2]];
             int fX = LabCbrtTab_b[CV_DESCALE(R*C0 + G*C1 + B*C2, lab_shift)];
@@ -6190,7 +6291,7 @@ struct RGB2Lab_f
         volatile int _3 = 3;
         initLabTabs();
 
-        useTetraInterpolation = (!_coeffs && !_whitept && srgb && enableTetraInterpolation);
+        useBitExactness = (!_coeffs && !_whitept && srgb && enableBitExactness);
 
         if (!_coeffs)
             _coeffs = sRGB2XYZ_D65;
@@ -6222,25 +6323,104 @@ struct RGB2Lab_f
         n *= 3;
 
         i = 0;
-        if(useTetraInterpolation)
+        if(useBitExactness)
         {
+            if(enablePackedLab)
+            {
+                static const int nPixels = 4*2;
+                for(; i < n - 3*nPixels; i += 3*nPixels, src += scn*nPixels)
+                {
+                    v_float32x4 rvec0, gvec0, bvec0, rvec1, gvec1, bvec1;
+                    v_float32x4 dummy0, dummy1;
+                    if(scn == 3)
+                    {
+                        v_load_deinterleave(src, rvec0, gvec0, bvec0);
+                        v_load_deinterleave(src + scn*4, rvec1, gvec1, bvec1);
+                    }
+                    else // scn == 4
+                    {
+                        v_load_deinterleave(src, rvec0, gvec0, bvec0, dummy0);
+                        v_load_deinterleave(src + scn*4, rvec1, gvec1, bvec1, dummy1);
+                    }
+
+                    if(bIdx)
+                    {
+                        dummy0 = rvec0; rvec0 = bvec0; bvec0 = dummy0;
+                        dummy1 = rvec1; rvec1 = bvec1; bvec1 = dummy1;
+                    }
+
+                    v_float32x4 zerof = v_setzero_f32(), onef = v_setall_f32(1.0f);
+                    /* clip() */
+                    #define clipv(r) (r) = v_min(v_max((r), zerof), onef)
+                    clipv(rvec0); clipv(rvec1);
+                    clipv(gvec0); clipv(gvec1);
+                    clipv(bvec0); clipv(bvec1);
+                    #undef clipv
+                    /* int iR = R*LAB_BASE, iG = G*LAB_BASE, iB = B*LAB_BASE, iL, ia, ib; */
+                    v_float32x4 basef = v_setall_f32(LAB_BASE);
+                    rvec0 *= basef, gvec0 *= basef, bvec0 *= basef;
+                    rvec1 *= basef, gvec1 *= basef, bvec1 *= basef;
+
+                    v_int32x4 irvec0, igvec0, ibvec0, irvec1, igvec1, ibvec1;
+                    irvec0 = v_round(rvec0); irvec1 = v_round(rvec1);
+                    igvec0 = v_round(gvec0); igvec1 = v_round(gvec1);
+                    ibvec0 = v_round(bvec0); ibvec1 = v_round(bvec1);
+
+                    v_int16x8 irvec, igvec, ibvec;
+                    irvec = v_pack(irvec0, irvec1);
+                    igvec = v_pack(igvec0, igvec1);
+                    ibvec = v_pack(ibvec0, ibvec1);
+
+                    v_uint16x8 uirvec(irvec.val), uigvec(igvec.val), uibvec(ibvec.val);
+
+                    v_uint16x8 ui_lvec, ui_avec, ui_bvec;
+                    trilinearPackedInterpolate(uirvec, uigvec, uibvec, RGB2LabLUT_s16, ui_lvec, ui_avec, ui_bvec);
+                    v_int16x8 i_lvec(ui_lvec.val), i_avec(ui_avec.val), i_bvec(ui_bvec.val);
+
+                    /* float L = iL*1.0f/LAB_BASE, a = ia*1.0f/LAB_BASE, b = ib*1.0f/LAB_BASE; */
+                    v_int32x4 i_lvec0, i_avec0, i_bvec0, i_lvec1, i_avec1, i_bvec1;
+                    v_expand(i_lvec, i_lvec0, i_lvec1);
+                    v_expand(i_avec, i_avec0, i_avec1);
+                    v_expand(i_bvec, i_bvec0, i_bvec1);
+
+                    v_float32x4 l_vec0, a_vec0, b_vec0, l_vec1, a_vec1, b_vec1;
+                    l_vec0 = v_cvt_f32(i_lvec0); l_vec1 = v_cvt_f32(i_lvec1);
+                    a_vec0 = v_cvt_f32(i_avec0); a_vec1 = v_cvt_f32(i_avec1);
+                    b_vec0 = v_cvt_f32(i_bvec0); b_vec1 = v_cvt_f32(i_bvec1);
+
+                    /* dst[i] = L*100.0f */
+                    l_vec0 = l_vec0*v_setall_f32(100.0f/LAB_BASE);
+                    l_vec1 = l_vec1*v_setall_f32(100.0f/LAB_BASE);
+                    /*
+                    dst[i + 1] = a*256.0f - 128.0f;
+                    dst[i + 2] = b*256.0f - 128.0f;
+                    */
+                    a_vec0 = a_vec0*v_setall_f32(256.0f/LAB_BASE) - v_setall_f32(128.0f);
+                    a_vec1 = a_vec1*v_setall_f32(256.0f/LAB_BASE) - v_setall_f32(128.0f);
+                    b_vec0 = b_vec0*v_setall_f32(256.0f/LAB_BASE) - v_setall_f32(128.0f);
+                    b_vec1 = b_vec1*v_setall_f32(256.0f/LAB_BASE) - v_setall_f32(128.0f);
+
+                    v_store_interleave(dst + i, l_vec0, a_vec0, b_vec0);
+                    v_store_interleave(dst + i + 3*4, l_vec1, a_vec1, b_vec1);
+                }
+            }
+
             for(; i < n; i += 3, src += scn)
             {
-                float R = clip(src[bIdx^2]);
+                float R = clip(src[bIdx]);
                 float G = clip(src[1]);
-                float B = clip(src[bIdx]);
+                float B = clip(src[bIdx^2]);
 
-                int L, a, b;
-                tetraInterpolate(R*LAB_BASE, G*LAB_BASE, B*LAB_BASE, RGB2LabLUT, L, a, b);
-                //noInterpolate(R*LAB_BASE, G*LAB_BASE, B*LAB_BASE, RGB2LabLUT, L, a, b);
+                int iR = R*LAB_BASE, iG = G*LAB_BASE, iB = B*LAB_BASE, iL, ia, ib;
+                trilinearInterpolate(iR, iG, iB, RGB2LabLUT_s16, iL, ia, ib);
+                float L = iL*1.0f/LAB_BASE, a = ia*1.0f/LAB_BASE, b = ib*1.0f/LAB_BASE;
 
-                dst[i] = L*100.0f/LAB_BASE;
-                dst[i + 1] = a*256.0f/LAB_BASE - 128.0f;
-                dst[i + 2] = b*256.0f/LAB_BASE - 128.0f;
+                dst[i] = L*100.0f;
+                dst[i + 1] = a*256.0f - 128.0f;
+                dst[i + 2] = b*256.0f - 128.0f;
             }
         }
 
-        static const float _1_3 = 1.0f / 3.0f;
         static const float _a = 16.0f / 116.0f;
         for (; i < n; i += 3, src += scn )
         {
@@ -6258,9 +6438,9 @@ struct RGB2Lab_f
             float Y = R*C3 + G*C4 + B*C5;
             float Z = R*C6 + G*C7 + B*C8;
 
-            float FX = X > 0.008856f ? std::pow(X, _1_3) : (7.787f * X + _a);
-            float FY = Y > 0.008856f ? std::pow(Y, _1_3) : (7.787f * Y + _a);
-            float FZ = Z > 0.008856f ? std::pow(Z, _1_3) : (7.787f * Z + _a);
+            float FX = X > 0.008856f ? std::pow(X, _1_3f) : (7.787f * X + _a);
+            float FY = Y > 0.008856f ? std::pow(Y, _1_3f) : (7.787f * Y + _a);
+            float FZ = Z > 0.008856f ? std::pow(Z, _1_3f) : (7.787f * Z + _a);
 
             float L = Y > 0.008856f ? (116.f * FY - 16.f) : (903.3f * Y);
             float a = 500.f * (FX - FY);
@@ -6275,21 +6455,21 @@ struct RGB2Lab_f
     int srccn;
     float coeffs[9];
     bool srgb;
-    bool useTetraInterpolation;
+    bool useBitExactness;
     int blueIdx;
 };
 
-struct Lab2RGB_f
+
+// Performs conversion in floats
+struct Lab2RGBfloat
 {
     typedef float channel_type;
 
-    Lab2RGB_f( int _dstcn, int _blueIdx, const float* _coeffs,
+    Lab2RGBfloat( int _dstcn, int _blueIdx, const float* _coeffs,
               const float* _whitept, bool _srgb )
     : dstcn(_dstcn), srgb(_srgb), blueIdx(_blueIdx)
     {
         initLabTabs();
-
-        useTetraInterpolation = (!_coeffs && !_whitept && srgb && enableTetraInterpolation);
 
         if(!_coeffs)
             _coeffs = XYZ2sRGB_D65;
@@ -6401,7 +6581,7 @@ struct Lab2RGB_f
 
     void operator()(const float* src, float* dst, int n) const
     {
-        int i = 0, dcn = dstcn, bIdx = blueIdx;
+        int i = 0, dcn = dstcn;
         const float* gammaTab = srgb ? sRGBInvGammaTab : 0;
         float gscale = GammaTabScale;
         float C0 = coeffs[0], C1 = coeffs[1], C2 = coeffs[2],
@@ -6409,27 +6589,6 @@ struct Lab2RGB_f
         C6 = coeffs[6], C7 = coeffs[7], C8 = coeffs[8];
         float alpha = ColorChannel<float>::max();
         n *= 3;
-
-        if(useTetraInterpolation)
-        {
-            for (; i < n; i += 3, dst += dcn)
-            {
-                float li = src[i];
-                float ai = src[i + 1];
-                float bi = src[i + 2];
-
-                int ro, go, bo;
-
-                tetraInterpolate(li/100.0f*LAB_BASE, (ai+128.0f)/256.0f*LAB_BASE, (bi+128.0f)/256.0f*LAB_BASE,
-                                 Lab2RGBLUT, ro, go, bo);
-                //noInterpolate(li/100.0f*LAB_BASE, (ai+128.0f)/256.0f*LAB_BASE, (bi+128.0f)/256.0f*LAB_BASE,
-                //              Lab2RGBLUT, ro, go, bo);
-
-                dst[bIdx] = ro*1.0f/LAB_BASE, dst[1] = go*1.0f/LAB_BASE, dst[bIdx^2] = bo*1.0f/LAB_BASE;
-                if( dcn == 4 )
-                    dst[3] = alpha;
-            }
-        }
 
         #if CV_SSE2
         if (haveSIMD)
@@ -6550,19 +6709,410 @@ struct Lab2RGB_f
     bool haveSIMD;
     #endif
     int blueIdx;
-    bool useTetraInterpolation;
 };
 
-#undef clip
+
+// Performs conversion in integers
+struct Lab2RGBinteger
+{
+    typedef uchar channel_type;
+
+    static const int base_shift = 14;
+    static const int BASE = (1 << base_shift);
+    // lThresh == 0.008856f * 903.3f * (long long int)BASE/100
+    static const int lThresh = 1311;
+    // fThresh == (7.787f * 0.008856f + 16.0f / 116.0f)*BASE
+    static const int fThresh = 3390;
+    // base16_116 == BASE*16/116
+    static const int base16_116 = 2260;
+    static const int shift = lab_shift+(base_shift-inv_gamma_shift);
+
+    Lab2RGBinteger( int _dstcn, int _blueIdx, const float* _coeffs,
+               const float* _whitept, bool _srgb )
+    : dstcn(_dstcn), blueIdx(_blueIdx), srgb(_srgb)
+    {
+        if(!_coeffs)
+            _coeffs = XYZ2sRGB_D65;
+        if(!_whitept)
+            _whitept = D65;
+
+        //TODO: make these calculations in integers
+        for(int i = 0; i < 3; i++)
+        {
+            coeffs[i+(blueIdx^2*3)] = cvRound((1 << lab_shift)*_coeffs[i]*_whitept[i]);
+            coeffs[i+3] = cvRound((1 << lab_shift)*_coeffs[i+3]*_whitept[i]);
+            coeffs[i+blueIdx*3] = cvRound((1 << lab_shift)*_coeffs[i+6]*_whitept[i]);
+        }
+    }
+
+    // L, a, b should be in [-BASE; +BASE]
+    inline void process(const int L, const int a, const int b, int& ro, int& go, int& bo) const
+    {
+        int x, y, z;
+
+        int ify;
+        if(L <= lThresh)
+        {
+            //yy = li / 903.3f;
+            //y = L*100/903.3f;
+            y = divConst<14, 9033>(L*1000);
+
+            //fy = 7.787f * yy + 16.0f / 116.0f;
+            ify = base16_116 + y*8 - y*213/1000;
+        }
+        else
+        {
+            //fy = (li + 16.0f) / 116.0f;
+            ify = L*100/116 + base16_116;
+
+            //yy = fy * fy * fy;
+            y = ify*ify/BASE*ify/BASE;
+        }
+
+        //float fxz[] = { ai / 500.0f + fy, fy - bi / 200.0f };
+        int adiv, bdiv;
+        //adiv = a*256/500, bdiv = b*256/200;
+        adiv = divConst<24, 500>(a*256);
+        bdiv = divConst<24, 200>(b*256);
+
+        int ifxz[] = {ify + adiv, ify - bdiv};
+        for(int k = 0; k < 2; k++)
+        {
+            int& v = ifxz[k];
+            if(v <= fThresh)
+            {
+                //fxz[k] = (fxz[k] - 16.0f / 116.0f) / 7.787f;
+                v = v*1000/7787 - BASE*16/116*1000/7787;
+            }
+            else
+            {
+                //fxz[k] = fxz[k] * fxz[k] * fxz[k];
+                v = v*v/BASE*v/BASE;
+            }
+        }
+        x = ifxz[0]; y = y; z = ifxz[1];
+
+        int C0 = coeffs[0], C1 = coeffs[1], C2 = coeffs[2];
+        int C3 = coeffs[3], C4 = coeffs[4], C5 = coeffs[5];
+        int C6 = coeffs[6], C7 = coeffs[7], C8 = coeffs[8];
+
+        ro = CV_DESCALE(C0 * x + C1 * y + C2 * z, shift);
+        go = CV_DESCALE(C3 * x + C4 * y + C5 * z, shift);
+        bo = CV_DESCALE(C6 * x + C7 * y + C8 * z, shift);
+
+        ro = max(0, min((int)INV_GAMMA_TAB_SIZE-1, ro));
+        go = max(0, min((int)INV_GAMMA_TAB_SIZE-1, go));
+        bo = max(0, min((int)INV_GAMMA_TAB_SIZE-1, bo));
+
+        const ushort* tab = srgb ? sRGBInvGammaTab_b : linearInvGammaTab_b;
+        ro = tab[ro];
+        go = tab[go];
+        bo = tab[bo];
+    }
+
+    // L, a, b should be in [-BASE; +BASE]
+    inline void process(v_int32x4  liv, v_int32x4  aiv, v_int32x4  biv,
+                        v_int32x4& bdw, v_int32x4& gdw, v_int32x4& rdw) const
+    {
+        const ushort* tab = srgb ? sRGBInvGammaTab_b : linearInvGammaTab_b;
+        int C0 = coeffs[0], C1 = coeffs[1], C2 = coeffs[2];
+        int C3 = coeffs[3], C4 = coeffs[4], C5 = coeffs[5];
+        int C6 = coeffs[6], C7 = coeffs[7], C8 = coeffs[8];
+
+        v_int32x4 xiv, yiv, ziv;
+        v_int32x4 ify;
+        v_int32x4 y_lt, y_gt;
+        v_int32x4 ify_lt, ify_gt;
+
+        // Less-than part
+        /* y = L*100/903.3f; // == divConst<14, 9033>(L*1000); */
+        y_lt = divConst<14, 9033>(liv*v_setall_s32(1000));
+
+        /* //fy = 7.787f * yy + 16.0f / 116.0f;
+            ify = base16_116 + y*8 - divConst<14, 1000>(y*213); */
+        ify_lt = v_setall_s32(base16_116) + (y_lt << 3) - divConst<14, 1000>(y_lt*v_setall_s32(213));
+
+        // Greater-than part
+        /* ify = divConst<20, 116>(L*100) + base16_116; */
+        ify_gt = divConst<20, 116>(liv*v_setall_s32(100)) + v_setall_s32(base16_116);
+
+        /* y = ify*ify/BASE*ify/BASE; */
+        y_gt = (((ify_gt*ify_gt) >> base_shift)*ify_gt) >> base_shift;
+
+        // Combining LT and GT parts
+        /* y, ify = (L <= lThresh) ? ... : ... ; */
+        v_int32x4 mask = liv <= v_setall_s32(lThresh);
+        yiv = v_select(mask, y_lt, y_gt);
+        ify = v_select(mask, ify_lt, ify_gt);
+
+        /*
+            adiv = divConst<24, 500>(a*256);
+            bdiv = divConst<24, 200>(b*256);
+            int ifxz[] = {ify + adiv, ify - bdiv};
+        */
+        v_int32x4 adiv, bdiv;
+        adiv = divConst<24, 500>(aiv << 8);
+        bdiv = divConst<24, 200>(biv << 8);
+
+        /* x = ifxz[0]; y = y; z = ifxz[1]; */
+        xiv = ify + adiv;
+        ziv = ify - bdiv;
+
+        v_int32x4 v_lt, v_gt;
+        // k = 0
+        /* v = (v <= fThresh) ? ... : ... ; */
+        mask = xiv <= v_setall_s32(fThresh);
+
+        // Less-than part
+        /* v = divConst<14, 7787>(v*1000) - BASE*16/116*1000/7787; */
+        v_lt = divConst<14, 7787>(xiv*v_setall_s32(1000)) - v_setall_s32(BASE*16/116*1000/7787);
+
+        // Greater-than part
+        /* v = v*v/BASE*v/BASE; */
+        v_gt = (((xiv*xiv) >> base_shift) * xiv) >> base_shift;
+
+        // Combining LT ang GT parts
+        xiv = v_select(mask, v_lt, v_gt);
+
+        // k = 1: the same as above but for z
+        mask = ziv <= v_setall_s32(fThresh);
+        v_lt = divConst<14, 7787>(ziv*v_setall_s32(1000)) - v_setall_s32(BASE*16/116*1000/7787);
+        v_gt = (((ziv*ziv) >> base_shift) * ziv) >> base_shift;
+        ziv = v_select(mask, v_lt, v_gt);
+
+        /*
+                ro = CV_DESCALE(C0 * x + C1 * y + C2 * z, shift);
+                go = CV_DESCALE(C3 * x + C4 * y + C5 * z, shift);
+                bo = CV_DESCALE(C6 * x + C7 * y + C8 * z, shift);
+        */
+        v_int32x4 descaleShift = v_setall_s32(1 << (shift-1));
+        rdw = (xiv*v_setall_s32(C0) + yiv*v_setall_s32(C1) + ziv*v_setall_s32(C2) + descaleShift) >> shift;
+        gdw = (xiv*v_setall_s32(C3) + yiv*v_setall_s32(C4) + ziv*v_setall_s32(C5) + descaleShift) >> shift;
+        bdw = (xiv*v_setall_s32(C6) + yiv*v_setall_s32(C7) + ziv*v_setall_s32(C8) + descaleShift) >> shift;
+
+        //limit indices in table and then substitute
+        //ro = tab[ro]; go = tab[go]; bo = tab[bo];
+        v_int32x4 tabsz = v_setall_s32((int)INV_GAMMA_TAB_SIZE-1);
+        int32_t CV_DECL_ALIGNED(16) shifts[4];
+        rdw = v_max(v_setzero_s32(), v_min(tabsz, rdw));
+        gdw = v_max(v_setzero_s32(), v_min(tabsz, gdw));
+        bdw = v_max(v_setzero_s32(), v_min(tabsz, bdw));
+
+        v_store_aligned(shifts, rdw);
+        rdw = v_int32x4(tab[shifts[0]], tab[shifts[1]], tab[shifts[2]], tab[shifts[3]]);
+
+        v_store_aligned(shifts, gdw);
+        gdw = v_int32x4(tab[shifts[0]], tab[shifts[1]], tab[shifts[2]], tab[shifts[3]]);
+
+        v_store_aligned(shifts, bdw);
+        bdw = v_int32x4(tab[shifts[0]], tab[shifts[1]], tab[shifts[2]], tab[shifts[3]]);
+    }
+
+    void operator()(const float* src, float* dst, int n) const
+    {
+        int dcn = dstcn, bIdx = blueIdx;
+        float alpha = ColorChannel<float>::max();
+
+        int i = 0;
+        if(enablePackedLab)
+        {
+            v_float32x4 vldiv  = v_setall_f32(BASE/100.0f);
+            v_float32x4 vadiv  = v_setall_f32(BASE/256.0f);
+            v_float32x4 vf255  = v_setall_f32(255.f);
+            static const int nPixels = 4;
+            for(; i <= n*3-3*nPixels; i += 3*nPixels, dst += dcn*nPixels)
+            {
+                /*
+                int L = saturate_cast<int>(src[i]*BASE/100.0f);
+                int a = saturate_cast<int>(src[i + 1]*BASE/256);
+                int b = saturate_cast<int>(src[i + 2]*BASE/256);
+                */
+                v_float32x4 vl, va, vb;
+                v_load_deinterleave(src + i, vl, va, vb);
+                vl *= vldiv; va *= vadiv; vb *= vadiv;
+
+                v_int32x4 ivl = v_round(vl), iva = v_round(va), ivb = v_round(vb);
+                v_int32x4 r_vecs, g_vecs, b_vecs;
+
+                process(ivl, iva, ivb, b_vecs, g_vecs, r_vecs);
+
+                v_float32x4 v_r, v_g, v_b;
+                v_r = v_cvt_f32(r_vecs)/vf255;
+                v_g = v_cvt_f32(g_vecs)/vf255;
+                v_b = v_cvt_f32(b_vecs)/vf255;
+
+                v_float32x4 dummy;
+                if(bIdx == 0)
+                {
+                    dummy = v_r; v_r = v_b; v_b = dummy;
+                }
+
+                if(dcn == 4)
+                {
+                    v_store_interleave(dst, v_b, v_g, v_r, v_setall_f32(alpha));
+                }
+                else // dcn == 3
+                {
+                    v_store_interleave(dst, v_b, v_g, v_r);
+                }
+            }
+        }
+
+        for(; i < n*3; i += 3, dst += dcn)
+        {
+            int L = saturate_cast<int>(src[i]*BASE/100.0f);
+            int a = saturate_cast<int>(src[i + 1]*BASE/256);
+            int b = saturate_cast<int>(src[i + 2]*BASE/256);
+
+            int ro, go, bo;
+            process(L, a, b, ro, go, bo);
+
+            dst[bIdx^2] = bo/255.f;
+            dst[1]      = go/255.f;
+            dst[bIdx]   = ro/255.f;
+            if(dcn == 4)
+                dst[3] = alpha;
+        }
+    }
+
+    void operator()(const uchar* src, uchar* dst, int n) const
+    {
+        int i, dcn = dstcn;
+        int bIdx = blueIdx;
+        uchar alpha = ColorChannel<uchar>::max();
+        i = 0;
+
+        if(enablePackedLab)
+        {
+            for(; i <= n*3-3*8*2; i += 3*8*2, dst += dcn*8*2)
+            {
+                /*
+                    int L = src[i + 0];
+                    int a = src[i + 1];
+                    int b = src[i + 2];
+                */
+                v_uint8x16 u8l, u8a, u8b;
+                v_load_deinterleave(src + i, u8l, u8a, u8b);
+                v_uint16x8 lvec0, lvec1, avec0, avec1, bvec0, bvec1;
+                v_expand(u8l, lvec0, lvec1);
+                v_expand(u8a, avec0, avec1);
+                v_expand(u8b, bvec0, bvec1);
+                v_int16x8 slvec0(lvec0.val), slvec1(lvec1.val);
+                v_int16x8 savec0(avec0.val), savec1(avec1.val);
+                v_int16x8 sbvec0(bvec0.val), sbvec1(bvec1.val);
+                v_int32x4  lvecs[4], avecs[4], bvecs[4];
+                v_expand(slvec0, lvecs[0], lvecs[1]); v_expand(slvec1, lvecs[2], lvecs[3]);
+                v_expand(savec0, avecs[0], avecs[1]); v_expand(savec1, avecs[2], avecs[3]);
+                v_expand(sbvec0, bvecs[0], bvecs[1]); v_expand(sbvec1, bvecs[2], bvecs[3]);
+
+                v_int32x4 r_vecs[4], g_vecs[4], b_vecs[4];
+                for(int k = 0; k < 4; k++)
+                {
+                    /* L = L*BASE/255; // == divConst<14, 255>(L*BASE) */
+                    lvecs[k] = divConst<14, 255>(lvecs[k] << base_shift);
+
+                    /* a = (a - 128)*BASE/256; b = (a - 128)*BASE/256; */
+                    avecs[k] = (avecs[k] - v_setall_s32(128)) << (base_shift - 8);
+                    bvecs[k] = (bvecs[k] - v_setall_s32(128)) << (base_shift - 8);
+                    process(lvecs[k], avecs[k], bvecs[k], b_vecs[k], g_vecs[k], r_vecs[k]);
+                }
+
+                v_int16x8 s_rvec0, s_rvec1, s_gvec0, s_gvec1, s_bvec0, s_bvec1;
+                s_rvec0 = v_pack(r_vecs[0], r_vecs[1]), s_rvec1 = v_pack(r_vecs[2], r_vecs[3]);
+                s_gvec0 = v_pack(g_vecs[0], g_vecs[1]), s_gvec1 = v_pack(g_vecs[2], g_vecs[3]);
+                s_bvec0 = v_pack(b_vecs[0], b_vecs[1]), s_bvec1 = v_pack(b_vecs[2], b_vecs[3]);
+
+                v_uint16x8 u_rvec0(s_rvec0.val), u_rvec1(s_rvec1.val);
+                v_uint16x8 u_gvec0(s_gvec0.val), u_gvec1(s_gvec1.val);
+                v_uint16x8 u_bvec0(s_bvec0.val), u_bvec1(s_bvec1.val);
+
+                v_uint8x16 u8_b, u8_g, u8_r;
+                u8_b = v_pack(u_bvec0, u_bvec1);
+                u8_g = v_pack(u_gvec0, u_gvec1);
+                u8_r = v_pack(u_rvec0, u_rvec1);
+
+                v_uint8x16 dummy;
+                if(bIdx == 0)
+                {
+                    dummy = u8_r; u8_r = u8_b; u8_b = dummy;
+                }
+
+                if(dcn == 4)
+                {
+                    v_store_interleave(dst, u8_b, u8_g, u8_r, v_setall_u8(alpha));
+                }
+                else
+                {
+                    v_store_interleave(dst, u8_b, u8_g, u8_r);
+                }
+            }
+        }
+
+        for (; i < n*3; i += 3, dst += dcn)
+        {
+            int ro, go, bo;
+            int L = src[i + 0]*BASE/255;
+            int a = (src[i + 1] - 128)*BASE/256;
+            int b = (src[i + 2] - 128)*BASE/256;
+
+            process(L, a, b, ro, go, bo);
+
+            dst[bIdx^2] = saturate_cast<uchar>(bo);
+            dst[1]      = saturate_cast<uchar>(go);
+            dst[bIdx]   = saturate_cast<uchar>(ro);
+            if( dcn == 4 )
+                dst[3] = alpha;
+        }
+    }
+
+    int dstcn;
+    int blueIdx;
+    float coeffs[9];
+    bool srgb;
+};
+
+
+struct Lab2RGB_f
+{
+    typedef float channel_type;
+
+    Lab2RGB_f( int _dstcn, int _blueIdx, const float* _coeffs,
+              const float* _whitept, bool _srgb )
+    : fcvt(_dstcn, _blueIdx, _coeffs, _whitept, _srgb), icvt(3, _blueIdx, _coeffs, _whitept, _srgb),
+      dstcn(_dstcn)
+    {
+        useBitExactness = (!_coeffs && !_whitept && _srgb && enableBitExactness);
+    }
+
+    void operator()(const float* src, float* dst, int n) const
+    {
+        if(useBitExactness)
+        {
+            icvt(src, dst, n);
+        }
+        else
+        {
+            fcvt(src, dst, n);
+        }
+    }
+
+    Lab2RGBfloat   fcvt;
+    Lab2RGBinteger icvt;
+    int dstcn;
+    bool useBitExactness;
+};
+
 
 struct Lab2RGB_b
 {
     typedef uchar channel_type;
 
-    Lab2RGB_b( int _dstcn, int blueIdx, const float* _coeffs,
+    Lab2RGB_b( int _dstcn, int _blueIdx, const float* _coeffs,
                const float* _whitept, bool _srgb )
-    : dstcn(_dstcn), cvt(3, blueIdx, _coeffs, _whitept, _srgb )
+    : fcvt(3, _blueIdx, _coeffs, _whitept, _srgb ), icvt(_dstcn, _blueIdx, _coeffs, _whitept, _srgb), dstcn(_dstcn)
     {
+        useBitExactness = (!_coeffs && !_whitept && _srgb && enableBitExactness);
+
         #if CV_NEON
         v_scale_inv = vdupq_n_f32(100.f/255.f);
         v_scale = vdupq_n_f32(255.f);
@@ -6619,6 +7169,12 @@ struct Lab2RGB_b
 
     void operator()(const uchar* src, uchar* dst, int n) const
     {
+        if(useBitExactness)
+        {
+            icvt(src, dst, n);
+            return;
+        }
+
         int i, j, dcn = dstcn;
         uchar alpha = ColorChannel<uchar>::max();
         float CV_DECL_ALIGNED(16) buf[3*BLOCK_SIZE];
@@ -6627,7 +7183,8 @@ struct Lab2RGB_b
         __m128 v_res = _mm_set_ps(0.f, 128.f, 128.f, 0.f);
         #endif
 
-        for( i = 0; i < n; i += BLOCK_SIZE, src += BLOCK_SIZE*3 )
+        i = 0;
+        for(; i < n; i += BLOCK_SIZE, src += BLOCK_SIZE*3 )
         {
             int dn = std::min(n - i, (int)BLOCK_SIZE);
             j = 0;
@@ -6674,7 +7231,7 @@ struct Lab2RGB_b
                 buf[j+1] = (float)(src[j+1] - 128);
                 buf[j+2] = (float)(src[j+2] - 128);
             }
-            cvt(buf, buf, dn);
+            fcvt(buf, buf, dn);
             j = 0;
 
             #if CV_NEON
@@ -6767,9 +7324,8 @@ struct Lab2RGB_b
         }
     }
 
-    int dstcn;
-    Lab2RGB_f cvt;
-
+    Lab2RGBfloat   fcvt;
+    Lab2RGBinteger icvt;
     #if CV_NEON
     float32x4_t v_scale, v_scale_inv, v_128;
     uint8x8_t v_alpha;
@@ -6779,8 +7335,12 @@ struct Lab2RGB_b
     __m128i v_zero;
     bool haveSIMD;
     #endif
+    bool useBitExactness;
+    int dstcn;
 };
 
+#undef clip
+#undef DIV255
 
 ///////////////////////////////////// RGB <-> L*u*v* /////////////////////////////////////
 
@@ -8907,16 +9467,16 @@ static bool ocl_cvtColor( InputArray _src, OutputArray _dst, int code, int dcn )
                 Mat(1, 9, CV_32FC1, coeffs).copyTo(ucoeffs);
             }
 
-            float _1_3 = 1.0f / 3.0f, _a = 16.0f / 116.0f;
+            float _a = 16.0f / 116.0f;
             ocl::KernelArg ucoeffsarg = ocl::KernelArg::PtrReadOnly(ucoeffs);
 
             if (lab)
             {
                 if (srgb)
                     k.args(srcarg, dstarg, ocl::KernelArg::PtrReadOnly(usRGBGammaTab),
-                           ucoeffsarg, _1_3, _a);
+                           ucoeffsarg, _1_3f, _a);
                 else
-                    k.args(srcarg, dstarg, ucoeffsarg, _1_3, _a);
+                    k.args(srcarg, dstarg, ucoeffsarg, _1_3f, _a);
             }
             else
             {
