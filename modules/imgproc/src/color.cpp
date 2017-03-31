@@ -6727,9 +6727,9 @@ struct Lab2RGBinteger
     static const int base16_116 = 2260;
     static const int shift = lab_shift+(base_shift-inv_gamma_shift);
 
-    Lab2RGBinteger( int _dstcn, int _blueIdx, const float* _coeffs,
-               const float* _whitept, bool _srgb )
-    : dstcn(_dstcn), blueIdx(_blueIdx), srgb(_srgb)
+    Lab2RGBinteger( int _dstcn, int blueIdx, const float* _coeffs,
+                    const float* _whitept, bool _srgb )
+    : dstcn(_dstcn), srgb(_srgb)
     {
         if(!_coeffs)
             _coeffs = XYZ2sRGB_D65;
@@ -6739,9 +6739,9 @@ struct Lab2RGBinteger
         //TODO: make these calculations in integers
         for(int i = 0; i < 3; i++)
         {
-            coeffs[i+(blueIdx^2*3)] = cvRound((1 << lab_shift)*_coeffs[i]*_whitept[i]);
-            coeffs[i+3] = cvRound((1 << lab_shift)*_coeffs[i+3]*_whitept[i]);
-            coeffs[i+blueIdx*3] = cvRound((1 << lab_shift)*_coeffs[i+6]*_whitept[i]);
+            coeffs[i+(blueIdx)*3]   = cvRound((1 << lab_shift)*_coeffs[i  ]*_whitept[i]);
+            coeffs[i+3]             = cvRound((1 << lab_shift)*_coeffs[i+3]*_whitept[i]);
+            coeffs[i+(blueIdx^2)*3] = cvRound((1 << lab_shift)*_coeffs[i+6]*_whitept[i]);
         }
     }
 
@@ -6910,7 +6910,7 @@ struct Lab2RGBinteger
 
     void operator()(const float* src, float* dst, int n) const
     {
-        int dcn = dstcn, bIdx = blueIdx;
+        int dcn = dstcn;
         float alpha = ColorChannel<float>::max();
 
         int i = 0;
@@ -6941,12 +6941,6 @@ struct Lab2RGBinteger
                 v_g = v_cvt_f32(g_vecs)/vf255;
                 v_b = v_cvt_f32(b_vecs)/vf255;
 
-                v_float32x4 dummy;
-                if(bIdx == 0)
-                {
-                    dummy = v_r; v_r = v_b; v_b = dummy;
-                }
-
                 if(dcn == 4)
                 {
                     v_store_interleave(dst, v_b, v_g, v_r, v_setall_f32(alpha));
@@ -6967,9 +6961,9 @@ struct Lab2RGBinteger
             int ro, go, bo;
             process(L, a, b, ro, go, bo);
 
-            dst[bIdx^2] = bo/255.f;
-            dst[1]      = go/255.f;
-            dst[bIdx]   = ro/255.f;
+            dst[0] = bo/255.f;
+            dst[1] = go/255.f;
+            dst[2] = ro/255.f;
             if(dcn == 4)
                 dst[3] = alpha;
         }
@@ -6978,7 +6972,6 @@ struct Lab2RGBinteger
     void operator()(const uchar* src, uchar* dst, int n) const
     {
         int i, dcn = dstcn;
-        int bIdx = blueIdx;
         uchar alpha = ColorChannel<uchar>::max();
         i = 0;
 
@@ -7031,12 +7024,6 @@ struct Lab2RGBinteger
                 u8_g = v_pack(u_gvec0, u_gvec1);
                 u8_r = v_pack(u_rvec0, u_rvec1);
 
-                v_uint8x16 dummy;
-                if(bIdx == 0)
-                {
-                    dummy = u8_r; u8_r = u8_b; u8_b = dummy;
-                }
-
                 if(dcn == 4)
                 {
                     v_store_interleave(dst, u8_b, u8_g, u8_r, v_setall_u8(alpha));
@@ -7057,16 +7044,15 @@ struct Lab2RGBinteger
 
             process(L, a, b, ro, go, bo);
 
-            dst[bIdx^2] = saturate_cast<uchar>(bo);
-            dst[1]      = saturate_cast<uchar>(go);
-            dst[bIdx]   = saturate_cast<uchar>(ro);
+            dst[0] = saturate_cast<uchar>(bo);
+            dst[1] = saturate_cast<uchar>(go);
+            dst[2] = saturate_cast<uchar>(ro);
             if( dcn == 4 )
                 dst[3] = alpha;
         }
     }
 
     int dstcn;
-    int blueIdx;
     float coeffs[9];
     bool srgb;
 };
