@@ -1208,13 +1208,9 @@ struct Lab2RGBinteger
     }
 
     // L, a, b should be in [-BASE; +BASE]
-    inline void process(v_int32x4& liv, v_int32x4& aiv, v_int32x4& biv,
+    inline void process(v_int32x4  liv, v_int32x4  aiv, v_int32x4  biv,
                         v_int32x4& bdw, v_int32x4& gdw, v_int32x4& rdw) const
     {
-        int C0 = coeffs[0], C1 = coeffs[1], C2 = coeffs[2];
-        int C3 = coeffs[3], C4 = coeffs[4], C5 = coeffs[5];
-        int C6 = coeffs[6], C7 = coeffs[7], C8 = coeffs[8];
-
         v_int32x4 xiv, yiv, ziv;
         v_int32x4 ify;
         v_int32x4 y_lt, y_gt;
@@ -1283,6 +1279,9 @@ struct Lab2RGBinteger
                 go = CV_DESCALE(C3 * x + C4 * y + C5 * z, shift);
                 bo = CV_DESCALE(C6 * x + C7 * y + C8 * z, shift);
         */
+        int C0 = coeffs[0], C1 = coeffs[1], C2 = coeffs[2];
+        int C3 = coeffs[3], C4 = coeffs[4], C5 = coeffs[5];
+        int C6 = coeffs[6], C7 = coeffs[7], C8 = coeffs[8];
         v_int32x4 descaleShift = v_setall_s32(1 << (shift-1));
         rdw = (xiv*v_setall_s32(C0) + yiv*v_setall_s32(C1) + ziv*v_setall_s32(C2) + descaleShift) >> shift;
         gdw = (xiv*v_setall_s32(C3) + yiv*v_setall_s32(C4) + ziv*v_setall_s32(C5) + descaleShift) >> shift;
@@ -1291,19 +1290,18 @@ struct Lab2RGBinteger
         //limit indices in table and then substitute
         //ro = tab[ro]; go = tab[go]; bo = tab[bo];
         v_int32x4 tabsz = v_setall_s32((int)INV_GAMMA_TAB_SIZE-1);
-        int32_t CV_DECL_ALIGNED(16) shifts[4];
+        int32_t CV_DECL_ALIGNED(16) rshifts[4], gshifts[4], bshifts[4];
         rdw = v_max(v_setzero_s32(), v_min(tabsz, rdw));
         gdw = v_max(v_setzero_s32(), v_min(tabsz, gdw));
         bdw = v_max(v_setzero_s32(), v_min(tabsz, bdw));
 
-        v_store_aligned(shifts, rdw);
-        rdw = v_int32x4(tab[shifts[0]], tab[shifts[1]], tab[shifts[2]], tab[shifts[3]]);
+        v_store_aligned(rshifts, rdw);
+        v_store_aligned(gshifts, gdw);
+        v_store_aligned(bshifts, bdw);
 
-        v_store_aligned(shifts, gdw);
-        gdw = v_int32x4(tab[shifts[0]], tab[shifts[1]], tab[shifts[2]], tab[shifts[3]]);
-
-        v_store_aligned(shifts, bdw);
-        bdw = v_int32x4(tab[shifts[0]], tab[shifts[1]], tab[shifts[2]], tab[shifts[3]]);
+        rdw = v_int32x4(tab[rshifts[0]], tab[rshifts[1]], tab[rshifts[2]], tab[rshifts[3]]);
+        gdw = v_int32x4(tab[gshifts[0]], tab[gshifts[1]], tab[gshifts[2]], tab[gshifts[3]]);
+        bdw = v_int32x4(tab[bshifts[0]], tab[bshifts[1]], tab[bshifts[2]], tab[bshifts[3]]);
     }
 
     void operator()(const float* src, float* dst, int n) const
