@@ -186,7 +186,7 @@ enum
 #define  CV_DESCALE(x,n)     (((x) + (1 << ((n)-1))) >> (n))
 
 static const double _1_3 = 0.333333333333;
-const static float _1_3f = static_cast<float>(_1_3);
+static const float _1_3f = static_cast<float>(_1_3);
 
 ///////////////////////////////////// RGB <-> L*a*b* /////////////////////////////////////
 
@@ -1208,7 +1208,7 @@ struct Lab2RGBinteger
     }
 
     // L, a, b should be in [-BASE; +BASE]
-    inline void process(v_int32x4&  liv, v_int32x4&  aiv, v_int32x4&  biv,
+    inline void process(v_int32x4& liv, v_int32x4& aiv, v_int32x4& biv,
                         v_int32x4& bdw, v_int32x4& gdw, v_int32x4& rdw) const
     {
         int C0 = coeffs[0], C1 = coeffs[1], C2 = coeffs[2];
@@ -1784,7 +1784,7 @@ TEST(ImgProc_Color, LabCheckWorking)
     std::vector<Mat> chDiff, chInter;
     double vmin[3], vmax[3]; Point minPt[3], maxPt[3];
     double maxMaxError[4] = {-100, -100, -100, -100};
-    double times[4] = {0, 0, 0, 0};
+    double times[4] = {1e9, 1e9, 1e9, 1e9};
     int count = 0;
 
     int blue = 0, l = 0;
@@ -1985,7 +1985,7 @@ TEST(ImgProc_Color, LabCheckWorking)
                         if(TO_BGR)
                         {
                             //Lab
-                            pRow_b[3*q + 0] = rng(256)*255/100;
+                            pRow_b[3*q + 0] = rng(256)*100/255;
                             pRow_b[3*q + 1] = rng(256);
                             pRow_b[3*q + 2] = rng(256);
                         }
@@ -2019,6 +2019,7 @@ TEST(ImgProc_Color, LabCheckWorking)
         }
 
         //perf test
+        std::cout.flush();
         std::cout << "perf: ";
         TickMeter tm; double t;
         //Lab to BGR
@@ -2042,7 +2043,7 @@ TEST(ImgProc_Color, LabCheckWorking)
             }
         }
         tm.stop();
-        t = tm.getTimeSec(); times[0] += t;
+        t = tm.getTimeSec(); times[0] = min(times[0], t);
         std::cout << "inter lab2bgr: " << t << " ";
         tm.reset(); tm.start();
         for(int i = 0; i < nPerfIters; i++)
@@ -2064,7 +2065,7 @@ TEST(ImgProc_Color, LabCheckWorking)
             }
         }
         tm.stop();
-        t = tm.getTimeSec(); times[1] += t;
+        t = tm.getTimeSec(); times[1] = min(times[1], t);
         std::cout << "gold lab2bgr: " << t << " ";
         //RGB to Lab
         tm.reset(); tm.start();
@@ -2087,7 +2088,7 @@ TEST(ImgProc_Color, LabCheckWorking)
             }
         }
         tm.stop();
-        t = tm.getTimeSec(); times[2] += t;
+        t = tm.getTimeSec(); times[2] = min(times[2], t);
         std::cout << "inter rgb2lab: " << t << " ";
         tm.reset(); tm.start();
         for(int i = 0; i < nPerfIters; i++)
@@ -2109,9 +2110,10 @@ TEST(ImgProc_Color, LabCheckWorking)
             }
         }
         tm.stop();
-        t = tm.getTimeSec(); times[3] += t;
+        t = tm.getTimeSec(); times[3] = min(times[3], t);
         std::cout << "gold rgb2lab: " << t << " ";
         std::cout << std::endl;
+        std::cout.flush();
         count++;
     }
 
@@ -2125,10 +2127,6 @@ TEST(ImgProc_Color, LabCheckWorking)
     std::cout << std::endl;
 
     //overall perf
-    for(int i = 0; i < 4; i++)
-    {
-        times[i] /= count;
-    }
     std::cout << "perf: ";
     std::cout << "inter lab2bgr: " << times[0] << " ";
     std::cout << "gold lab2bgr: "  << times[1] << " ";
