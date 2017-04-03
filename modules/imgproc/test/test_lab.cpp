@@ -241,7 +241,7 @@ struct SignificantBits<0>
     static const uint bits = 0;
 };
 
-// Multiply by constant fraction (mul/d) and add a number (toAdd)
+// v = v * mul/d + toAdd
 template<int w, long long int d, long long int mul, long long int toAdd>
 static inline int mulFracConst(int v)
 {
@@ -268,7 +268,7 @@ static inline int mulFracConst(int v)
     return (int)vl;
 }
 
-// Multiply by constant fraction (mul/d) and add a number (toAdd), d shouldn't be 2^n
+// v = v * mul/d + toAdd, d shouldn't be 2^n
 template<int w, long long int d, long long int mul, long long int toAdd>
 static inline v_int32x4 mulFracConst(v_int32x4 v)
 {
@@ -1156,7 +1156,7 @@ struct Lab2RGBinteger
             y = mulFracConst<14, 9033, 1000, 0>(L);
 
             //fy = 7.787f * yy + 16.0f / 116.0f;
-            ify = base16_116 + y*8 - y*213/1000;
+            ify = base16_116 + L*7787/9033;
         }
         else
         {
@@ -1208,10 +1208,9 @@ struct Lab2RGBinteger
     }
 
     // L, a, b should be in [-BASE; +BASE]
-    inline void process(v_int32x4  liv, v_int32x4  aiv, v_int32x4  biv,
-                        v_int32x4& bdw, v_int32x4& gdw, v_int32x4& rdw) const
+    inline void processLabToXYZ(v_int32x4  liv, v_int32x4  aiv, v_int32x4  biv,
+                                v_int32x4& xiv, v_int32x4& yiv, v_int32x4& ziv) const
     {
-        v_int32x4 xiv, yiv, ziv;
         v_int32x4 ify;
         v_int32x4 y_lt, y_gt;
         v_int32x4 ify_lt, ify_gt;
@@ -1221,8 +1220,9 @@ struct Lab2RGBinteger
         y_lt = mulFracConst<14, 9033, 1000, 0>(liv);
 
         /* //fy = 7.787f * yy + 16.0f / 116.0f;
-            ify = mulFracConst<14, 1000, 7783, base16_116>(y); */
-        ify_lt = mulFracConst<14, 1000, 7783, base16_116>(y_lt);
+            ify = mulFracConst<14, 1000, 7783, base16_116>(y);
+            ify = L*7783/9033 + base16_116; */
+        ify_lt = mulFracConst<14, 9033, 7783, base16_116>(liv);
 
         // Greater-than part
         /* ify = L*100/116 + base16_116; */
@@ -1273,7 +1273,11 @@ struct Lab2RGBinteger
 
         v_gt = (((ziv*ziv) >> base_shift) * ziv) >> base_shift;
         ziv = v_select(mask, v_lt, v_gt);
+    }
 
+    inline void processXYZToRGB(v_int32x4  xiv, v_int32x4  yiv, v_int32x4  ziv,
+                                v_int32x4& bdw, v_int32x4& gdw, v_int32x4& rdw) const
+    {
         /*
                 ro = CV_DESCALE(C0 * x + C1 * y + C2 * z, shift);
                 go = CV_DESCALE(C3 * x + C4 * y + C5 * z, shift);
@@ -1286,14 +1290,18 @@ struct Lab2RGBinteger
         rdw = (xiv*v_setall_s32(C0) + yiv*v_setall_s32(C1) + ziv*v_setall_s32(C2) + descaleShift) >> shift;
         gdw = (xiv*v_setall_s32(C3) + yiv*v_setall_s32(C4) + ziv*v_setall_s32(C5) + descaleShift) >> shift;
         bdw = (xiv*v_setall_s32(C6) + yiv*v_setall_s32(C7) + ziv*v_setall_s32(C8) + descaleShift) >> shift;
+    }
 
+    inline void processGamma(v_int32x4  inb, v_int32x4  ing, v_int32x4  inr,
+                             v_int32x4& bdw, v_int32x4& gdw, v_int32x4& rdw) const
+    {
         //limit indices in table and then substitute
         //ro = tab[ro]; go = tab[go]; bo = tab[bo];
         v_int32x4 tabsz = v_setall_s32((int)INV_GAMMA_TAB_SIZE-1);
         int32_t CV_DECL_ALIGNED(16) rshifts[4], gshifts[4], bshifts[4];
-        rdw = v_max(v_setzero_s32(), v_min(tabsz, rdw));
-        gdw = v_max(v_setzero_s32(), v_min(tabsz, gdw));
-        bdw = v_max(v_setzero_s32(), v_min(tabsz, bdw));
+        rdw = v_max(v_setzero_s32(), v_min(tabsz, inr));
+        gdw = v_max(v_setzero_s32(), v_min(tabsz, ing));
+        bdw = v_max(v_setzero_s32(), v_min(tabsz, inb));
 
         v_store_aligned(rshifts, rdw);
         v_store_aligned(gshifts, gdw);
@@ -1328,9 +1336,13 @@ struct Lab2RGBinteger
                 vl *= vldiv; va *= vadiv; vb *= vadiv;
 
                 v_int32x4 ivl = v_round(vl), iva = v_round(va), ivb = v_round(vb);
+                v_int32x4 ixv, iyv, izv;
+                v_int32x4 i_r, i_g, i_b;
                 v_int32x4 r_vecs, g_vecs, b_vecs;
 
-                process(ivl, iva, ivb, b_vecs, g_vecs, r_vecs);
+                processLabToXYZ(ivl, iva, ivb, ixv, iyv, izv);
+                processXYZToRGB(ixv, iyv, izv, i_b, i_g, i_r);
+                processGamma(i_b, i_g, i_r, b_vecs, g_vecs, r_vecs);
 
                 v_float32x4 v_r, v_g, v_b;
                 v_r = v_cvt_f32(r_vecs)/vf255;
@@ -1395,16 +1407,32 @@ struct Lab2RGBinteger
                 v_expand(savec0, avecs[0], avecs[1]); v_expand(savec1, avecs[2], avecs[3]);
                 v_expand(sbvec0, bvecs[0], bvecs[1]); v_expand(sbvec1, bvecs[2], bvecs[3]);
 
-                v_int32x4 r_vecs[4], g_vecs[4], b_vecs[4];
+                v_int32x4  lv[4], av[4], bv[4];
                 for(int k = 0; k < 4; k++)
                 {
                     /* L = L*BASE/255; */
-                    lvecs[k] = mulFracConst<14, 255, BASE, 0>(lvecs[k]);
-
+                    lv[k] = mulFracConst<14, 255, BASE, 0>(lvecs[k]);
                     /* a = (a - 128)*BASE/256; b = (a - 128)*BASE/256; */
-                    avecs[k] = (avecs[k] - v_setall_s32(128)) << (base_shift - 8);
-                    bvecs[k] = (bvecs[k] - v_setall_s32(128)) << (base_shift - 8);
-                    process(lvecs[k], avecs[k], bvecs[k], b_vecs[k], g_vecs[k], r_vecs[k]);
+                    av[k] = (avecs[k] - v_setall_s32(128)) << (base_shift - 8);
+                    bv[k] = (bvecs[k] - v_setall_s32(128)) << (base_shift - 8);
+                }
+
+                v_int32x4 xiv[4], yiv[4], ziv[4];
+                for(int k = 0; k < 4; k++)
+                {
+                    processLabToXYZ(lv[k], av[k], bv[k], xiv[k], yiv[k], ziv[k]);
+                }
+
+                v_int32x4 i_r[4], i_g[4], i_b[4];
+                for(int k = 0; k < 4; k++)
+                {
+                    processXYZToRGB(xiv[k], yiv[k], ziv[k], i_b[k], i_g[k], i_r[k]);
+                }
+
+                v_int32x4 r_vecs[4], g_vecs[4], b_vecs[4];
+                for(int k = 0; k < 4; k++)
+                {
+                    processGamma(i_b[k], i_g[k], i_r[k], b_vecs[k], g_vecs[k], r_vecs[k]);
                 }
 
                 v_int16x8 s_rvec0, s_rvec1, s_gvec0, s_gvec1, s_bvec0, s_bvec1;
