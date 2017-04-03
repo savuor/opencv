@@ -241,91 +241,35 @@ struct SignificantBits<0>
     static const uint bits = 0;
 };
 
-template<int w, long long int d>
-static inline int divConst(int v)
+// Multiply by constant fraction (mul/d) and add a number (toAdd)
+template<int w, long long int d, long long int mul, long long int toAdd>
+static inline int mulFracConst(int v)
 {
     const int b = SignificantBits<d>::bits - 1;
     const int r = w + b;
     const int pmod = (1l << r)%d;
     const int f = (1l << r)/d;
-    long long int vl = v;
+    long long int vl = v*mul;
     if(pmod)
     {
         if(pmod*2 > d)
         {
-            vl = (vl * (f + 1) + (1l << (r - 1))) >> r;
+            vl = toAdd + ((vl * (f + 1) + (1l << (r - 1))) >> r);
         }
         else
         {
-            vl = ((vl + 1) * f + (1l << (r - 1))) >> r;
+            vl = toAdd + (((vl + 1) * f + (1l << (r - 1))) >> r);
         }
     }
     else
     {
-        vl = (vl + (1l << (b - 1))) >> b;
+        vl = toAdd + ((vl + (1l << (b - 1))) >> b);
     }
     return (int)vl;
 }
 
-template<int w, long long int d>
-static inline v_int32x4 divConst(v_int32x4 v)
-{
-    const int b = SignificantBits<d>::bits - 1;
-    const int r = w + b;
-    const int pmod = (1l << r)%d;
-    const int f = (1l << r)/d;
-    // v_mul_expand doesn't support signed int32 args
-    v_int64x2 v0, v1;
-    v_uint64x2 uv0, uv1;
-    v_uint32x4 av = v_abs(v);
-    v_int32x4 mask = v < v_setzero_s32();
-    v_int64x2 nv0, nv1;
-    v_int32x4 negOut;
-    v_int32x4 out;
-    if(pmod)
-    {
-        v_uint32x4 fp1;
-        v_int64x2 adc;
-        if(pmod*2 > d)
-        {
-            fp1 = v_setall_u32(f + 1);
-            adc = v_setall_s64(1l << (r - 1));
-        }
-        else
-        {
-            fp1 = v_setall_u32(f);
-            adc = v_setall_s64(f + (1l << (r - 1)));
-        }
-
-        v_mul_expand(av, fp1, uv0, uv1);
-        v0.val = uv0.val, v1.val = uv1.val;
-
-        nv0 = v_setzero_s64() - v0;
-        nv1 = v_setzero_s64() - v1;
-
-        v0 = (v0 + adc) >> r;
-        v1 = (v1 + adc) >> r;
-        out = v_pack(v0, v1);
-
-        nv0 = (nv0 + adc) >> r;
-        nv1 = (nv1 + adc) >> r;
-        negOut = v_pack(nv0, nv1);
-
-        out = v_select(mask, negOut, out);
-    }
-    else
-    {
-        v_int64x2 adc = v_setall_s64(1l << (r - 1));
-        v_expand(v, v0, v1);
-        v0 = (v0 + adc) >> b;
-        v1 = (v1 + adc) >> b;
-        out = v_pack(v0, v1);
-    }
-    return out;
-}
-
-// Multiply by constant fraction (mul/d), mul or d shouldn't be 2^n
-template<int w, long long int d, long long int mul>
+// Multiply by constant fraction (mul/d) and add a number (toAdd), d shouldn't be 2^n
+template<int w, long long int d, long long int mul, long long int toAdd>
 static inline v_int32x4 mulFracConst(v_int32x4 v)
 {
     const int b = SignificantBits<d>::bits - 1;
@@ -345,12 +289,12 @@ static inline v_int32x4 mulFracConst(v_int32x4 v)
     if(pmod*2 > d)
     {
         fp1 = v_setall_u32((f + 1)*mul);
-        adc = v_setall_s64(1l << (r - 1));
+        adc = v_setall_s64((1l << (r - 1)) + (toAdd << r));
     }
     else
     {
         fp1 = v_setall_u32(f*mul);
-        adc = v_setall_s64(f + (1l << (r - 1)));
+        adc = v_setall_s64(f + (1l << (r - 1)) + (toAdd << r));
     }
 
     v_mul_expand(av, fp1, uv0, uv1);
@@ -1209,7 +1153,7 @@ struct Lab2RGBinteger
         {
             //yy = li / 903.3f;
             //y = L*100/903.3f;
-            y = divConst<14, 9033>(L*1000);
+            y = mulFracConst<14, 9033, 1000, 0>(L);
 
             //fy = 7.787f * yy + 16.0f / 116.0f;
             ify = base16_116 + y*8 - y*213/1000;
@@ -1226,8 +1170,8 @@ struct Lab2RGBinteger
         //float fxz[] = { ai / 500.0f + fy, fy - bi / 200.0f };
         int adiv, bdiv;
         //adiv = a*256/500, bdiv = b*256/200;
-        adiv = divConst<24, 500>(a*256);
-        bdiv = divConst<24, 200>(b*256);
+        adiv = mulFracConst<24, 500, 256, 0>(a);
+        bdiv = mulFracConst<24, 200, 256, 0>(b);
 
         int ifxz[] = {ify + adiv, ify - bdiv};
         for(int k = 0; k < 2; k++)
@@ -1277,17 +1221,16 @@ struct Lab2RGBinteger
         v_int32x4 ify_lt, ify_gt;
 
         // Less-than part
-        /* y = L*100/903.3f; // == divConst<14, 9033>(L*1000); */
-        y_lt = mulFracConst<14, 9033, 1000>(liv);
+        /* y = L*100/903.3f; // == mulFracConst<14, 9033, 1000, 0>(L); */
+        y_lt = mulFracConst<14, 9033, 1000, 0>(liv);
 
         /* //fy = 7.787f * yy + 16.0f / 116.0f;
-            ify = base16_116 + y*8 - divConst<14, 1000>(y*213); */
-        ify_lt = v_setall_s32(base16_116) + mulFracConst<14, 1000, 7783>(y_lt);
-        //ify_lt = v_setall_s32(base16_116) + (y_lt << 3) - mulFracConst<14, 1000, 213>(y_lt);
+            ify = mulFracConst<14, 1000, 7783, base16_116>(y); */
+        ify_lt = mulFracConst<14, 1000, 7783, base16_116>(y_lt);
 
         // Greater-than part
-        /* ify = divConst<20, 116>(L*100) + base16_116; */
-        ify_gt = mulFracConst<20, 116, 100>(liv) + v_setall_s32(base16_116);
+        /* ify = L*100/116 + base16_116; */
+        ify_gt = mulFracConst<20, 116, 100, base16_116>(liv);
 
         /* y = ify*ify/BASE*ify/BASE; */
         y_gt = (((ify_gt*ify_gt) >> base_shift)*ify_gt) >> base_shift;
@@ -1299,13 +1242,13 @@ struct Lab2RGBinteger
         ify = v_select(mask, ify_lt, ify_gt);
 
         /*
-            adiv = divConst<24, 500>(a*256);
-            bdiv = divConst<24, 200>(b*256);
+            adiv = mulFracConst<24, 500, 256, 0>(a);
+            bdiv = mulFracConst<24, 200, 256, 0>(b);
             int ifxz[] = {ify + adiv, ify - bdiv};
         */
         v_int32x4 adiv, bdiv;
-        adiv = divConst<24, 500>(aiv << 8);
-        bdiv = divConst<24, 200>(biv << 8);
+        adiv = mulFracConst<24, 500, 256, 0>(aiv);
+        bdiv = mulFracConst<24, 200, 256, 0>(biv);
 
         /* x = ifxz[0]; y = y; z = ifxz[1]; */
         xiv = ify + adiv;
@@ -1317,8 +1260,8 @@ struct Lab2RGBinteger
         mask = xiv <= v_setall_s32(fThresh);
 
         // Less-than part
-        /* v = divConst<14, 7787>(v*1000) - BASE*16/116*1000/7787; */
-        v_lt = mulFracConst<14, 7787, 1000>(xiv) - v_setall_s32(BASE*16/116*1000/7787);
+        /* v = v*1000/7787 - BASE*16/116*1000/7787; */
+        v_lt = mulFracConst<14, 7787, 1000, -BASE*16/116*1000/7787>(xiv);
 
         // Greater-than part
         /* v = v*v/BASE*v/BASE; */
@@ -1330,7 +1273,7 @@ struct Lab2RGBinteger
         // k = 1: the same as above but for z
         mask = ziv <= v_setall_s32(fThresh);
 
-        v_lt = mulFracConst<14, 7787, 1000>(ziv) - v_setall_s32(BASE*16/116*1000/7787);
+        v_lt = mulFracConst<14, 7787, 1000, -BASE*16/116*1000/7787>(ziv);
 
         v_gt = (((ziv*ziv) >> base_shift) * ziv) >> base_shift;
         ziv = v_select(mask, v_lt, v_gt);
@@ -1457,8 +1400,8 @@ struct Lab2RGBinteger
                 v_int32x4 r_vecs[4], g_vecs[4], b_vecs[4];
                 for(int k = 0; k < 4; k++)
                 {
-                    /* L = L*BASE/255; // == divConst<14, 255>(L*BASE) */
-                    lvecs[k] = divConst<14, 255>(lvecs[k] << base_shift);
+                    /* L = L*BASE/255; */
+                    lvecs[k] = mulFracConst<14, 255, BASE, 0>(lvecs[k]);
 
                     /* a = (a - 128)*BASE/256; b = (a - 128)*BASE/256; */
                     avecs[k] = (avecs[k] - v_setall_s32(128)) << (base_shift - 8);
