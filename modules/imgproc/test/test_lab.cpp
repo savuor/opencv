@@ -324,6 +324,53 @@ static inline v_int32x4 divConst(v_int32x4 v)
     return out;
 }
 
+// Multiply by constant fraction (mul/d), mul or d shouldn't be 2^n
+template<int w, long long int d, long long int mul>
+static inline v_int32x4 mulFracConst(v_int32x4 v)
+{
+    const int b = SignificantBits<d>::bits - 1;
+    const int r = w + b;
+    const int pmod = (1l << r)%d;
+    const int f = (1l << r)/d;
+    // v_mul_expand doesn't support signed int32 args
+    v_int64x2 v0, v1;
+    v_uint64x2 uv0, uv1;
+    v_uint32x4 av = v_abs(v);
+    v_int32x4 mask = v < v_setzero_s32();
+    v_int64x2 nv0, nv1;
+    v_int32x4 negOut;
+    v_int32x4 out;
+    v_uint32x4 fp1;
+    v_int64x2 adc;
+    if(pmod*2 > d)
+    {
+        fp1 = v_setall_u32((f + 1)*mul);
+        adc = v_setall_s64(1l << (r - 1));
+    }
+    else
+    {
+        fp1 = v_setall_u32(f*mul);
+        adc = v_setall_s64(f + (1l << (r - 1)));
+    }
+
+    v_mul_expand(av, fp1, uv0, uv1);
+    v0.val = uv0.val, v1.val = uv1.val;
+
+    nv0 = v_setzero_s64() - v0;
+    nv1 = v_setzero_s64() - v1;
+
+    v0 = (v0 + adc) >> r;
+    v1 = (v1 + adc) >> r;
+    out = v_pack(v0, v1);
+
+    nv0 = (nv0 + adc) >> r;
+    nv1 = (nv1 + adc) >> r;
+    negOut = v_pack(nv0, nv1);
+
+    out = v_select(mask, negOut, out);
+    return out;
+}
+
 #define clip(value) \
     value < 0.0f ? 0.0f : value > 1.0f ? 1.0f : value;
 
@@ -1133,8 +1180,8 @@ struct Lab2RGBinteger
     static const int shift = lab_shift+(base_shift-inv_gamma_shift);
 
     Lab2RGBinteger( int _dstcn, int blueIdx, const float* _coeffs,
-                    const float* _whitept, bool _srgb )
-    : dstcn(_dstcn), srgb(_srgb)
+                    const float* _whitept, bool srgb )
+    : dstcn(_dstcn)
     {
         if(!_coeffs)
             _coeffs = XYZ2sRGB_D65;
@@ -1148,6 +1195,8 @@ struct Lab2RGBinteger
             coeffs[i+3]             = cvRound((1 << lab_shift)*_coeffs[i+3]*_whitept[i]);
             coeffs[i+(blueIdx^2)*3] = cvRound((1 << lab_shift)*_coeffs[i+6]*_whitept[i]);
         }
+
+         tab = srgb ? sRGBInvGammaTab_b : linearInvGammaTab_b;
     }
 
     // L, a, b should be in [-BASE; +BASE]
@@ -1209,17 +1258,15 @@ struct Lab2RGBinteger
         go = max(0, min((int)INV_GAMMA_TAB_SIZE-1, go));
         bo = max(0, min((int)INV_GAMMA_TAB_SIZE-1, bo));
 
-        const ushort* tab = srgb ? sRGBInvGammaTab_b : linearInvGammaTab_b;
         ro = tab[ro];
         go = tab[go];
         bo = tab[bo];
     }
 
     // L, a, b should be in [-BASE; +BASE]
-    inline void process(v_int32x4  liv, v_int32x4  aiv, v_int32x4  biv,
+    inline void process(v_int32x4&  liv, v_int32x4&  aiv, v_int32x4&  biv,
                         v_int32x4& bdw, v_int32x4& gdw, v_int32x4& rdw) const
     {
-        const ushort* tab = srgb ? sRGBInvGammaTab_b : linearInvGammaTab_b;
         int C0 = coeffs[0], C1 = coeffs[1], C2 = coeffs[2];
         int C3 = coeffs[3], C4 = coeffs[4], C5 = coeffs[5];
         int C6 = coeffs[6], C7 = coeffs[7], C8 = coeffs[8];
@@ -1231,15 +1278,16 @@ struct Lab2RGBinteger
 
         // Less-than part
         /* y = L*100/903.3f; // == divConst<14, 9033>(L*1000); */
-        y_lt = divConst<14, 9033>(liv*v_setall_s32(1000));
+        y_lt = mulFracConst<14, 9033, 1000>(liv);
 
         /* //fy = 7.787f * yy + 16.0f / 116.0f;
             ify = base16_116 + y*8 - divConst<14, 1000>(y*213); */
-        ify_lt = v_setall_s32(base16_116) + (y_lt << 3) - divConst<14, 1000>(y_lt*v_setall_s32(213));
+        ify_lt = v_setall_s32(base16_116) + mulFracConst<14, 1000, 7783>(y_lt);
+        //ify_lt = v_setall_s32(base16_116) + (y_lt << 3) - mulFracConst<14, 1000, 213>(y_lt);
 
         // Greater-than part
         /* ify = divConst<20, 116>(L*100) + base16_116; */
-        ify_gt = divConst<20, 116>(liv*v_setall_s32(100)) + v_setall_s32(base16_116);
+        ify_gt = mulFracConst<20, 116, 100>(liv) + v_setall_s32(base16_116);
 
         /* y = ify*ify/BASE*ify/BASE; */
         y_gt = (((ify_gt*ify_gt) >> base_shift)*ify_gt) >> base_shift;
@@ -1270,7 +1318,7 @@ struct Lab2RGBinteger
 
         // Less-than part
         /* v = divConst<14, 7787>(v*1000) - BASE*16/116*1000/7787; */
-        v_lt = divConst<14, 7787>(xiv*v_setall_s32(1000)) - v_setall_s32(BASE*16/116*1000/7787);
+        v_lt = mulFracConst<14, 7787, 1000>(xiv) - v_setall_s32(BASE*16/116*1000/7787);
 
         // Greater-than part
         /* v = v*v/BASE*v/BASE; */
@@ -1281,7 +1329,9 @@ struct Lab2RGBinteger
 
         // k = 1: the same as above but for z
         mask = ziv <= v_setall_s32(fThresh);
-        v_lt = divConst<14, 7787>(ziv*v_setall_s32(1000)) - v_setall_s32(BASE*16/116*1000/7787);
+
+        v_lt = mulFracConst<14, 7787, 1000>(ziv) - v_setall_s32(BASE*16/116*1000/7787);
+
         v_gt = (((ziv*ziv) >> base_shift) * ziv) >> base_shift;
         ziv = v_select(mask, v_lt, v_gt);
 
@@ -1382,7 +1432,8 @@ struct Lab2RGBinteger
 
         if(enablePackedLab)
         {
-            for(; i <= n*3-3*8*2; i += 3*8*2, dst += dcn*8*2)
+            static const int nPixels = 8*2;
+            for(; i <= n*3-3*nPixels; i += 3*nPixels, dst += dcn*nPixels)
             {
                 /*
                     int L = src[i + 0];
@@ -1459,7 +1510,7 @@ struct Lab2RGBinteger
 
     int dstcn;
     float coeffs[9];
-    bool srgb;
+    ushort* tab;
 };
 
 
@@ -1740,7 +1791,7 @@ TEST(ImgProc_Color, LabCheckWorking)
     //TODO: make good test
     //return;
 
-    cv::setUseOptimized(false);
+    //cv::setUseOptimized(false);
 
     //settings
     #define INT_DATA 1
