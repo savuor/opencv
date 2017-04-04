@@ -1726,28 +1726,16 @@ struct Lab2RGB_f
 
     Lab2RGB_f( int _dstcn, int _blueIdx, const float* _coeffs,
               const float* _whitept, bool _srgb )
-    : fcvt(_dstcn, _blueIdx, _coeffs, _whitept, _srgb), icvt(3, _blueIdx, _coeffs, _whitept, _srgb),
-      dstcn(_dstcn)
-    {
-        useBitExactness = (!_coeffs && !_whitept && _srgb && enableBitExactness);
-    }
+    : fcvt(_dstcn, _blueIdx, _coeffs, _whitept, _srgb), dstcn(_dstcn)
+    { }
 
     void operator()(const float* src, float* dst, int n) const
     {
-        if(useBitExactness)
-        {
-            icvt(src, dst, n);
-        }
-        else
-        {
-            fcvt(src, dst, n);
-        }
+        fcvt(src, dst, n);
     }
 
-    Lab2RGBfloat   fcvt;
-    Lab2RGBinteger icvt;
+    Lab2RGBfloat fcvt;
     int dstcn;
-    bool useBitExactness;
 };
 
 #undef clip
