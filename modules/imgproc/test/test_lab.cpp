@@ -210,6 +210,7 @@ static ushort sRGBInvGammaTab_b[INV_GAMMA_TAB_SIZE], linearInvGammaTab_b[INV_GAM
 static ushort LabCbrtTab_b[LAB_CBRT_TAB_SIZE_B];
 
 static bool enableBitExactness = true;
+static bool enableRGB2LabInterpolation = true;
 static bool enablePackedLab = true;
 enum
 {
@@ -222,12 +223,6 @@ enum
 };
 static int16_t RGB2LabLUT_s16[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3*8];
 static int16_t trilinearLUT[TRILINEAR_BASE*TRILINEAR_BASE*TRILINEAR_BASE*8];
-
-//v*16384/255 ~~ v*16384/256 + v/4 if v in [0; 255]
-static inline void div255(v_uint16x8& reg)
-{
-    reg = (reg << (lab_base_shift - 8)) + (reg >> 2);
-}
 
 template <uint v>
 struct SignificantBits
@@ -298,7 +293,7 @@ static inline v_int32x4 mulFracConst(v_int32x4 v)
     }
 
     v_mul_expand(av, fp1, uv0, uv1);
-    v0.val = uv0.val, v1.val = uv1.val;
+    v0 = v_reinterpret_as_s64(uv0); v1 = v_reinterpret_as_s64(uv1);
 
     nv0 = v_setzero_s64() - v0;
     nv1 = v_setzero_s64() - v1;
@@ -373,7 +368,7 @@ static void initLabTabs()
             LabCbrtTab_b[i] = saturate_cast<ushort>((1 << lab_shift2)*(x < 0.008856f ? x*7.787f + 0.13793103448275862f : cvCbrt(x)));
         }
 
-        if(enableBitExactness)
+        if(enableRGB2LabInterpolation)
         {
             static const float _a = 16.0f / 116.0f;
 
@@ -615,7 +610,7 @@ struct RGB2Lab_f
         volatile int _3 = 3;
         initLabTabs();
 
-        useBitExactness = (!_coeffs && !_whitept && srgb && enableBitExactness);
+        useInterpolation = (!_coeffs && !_whitept && srgb && enableRGB2LabInterpolation);
 
         if (!_coeffs)
             _coeffs = sRGB2XYZ_D65;
@@ -647,7 +642,7 @@ struct RGB2Lab_f
         n *= 3;
 
         i = 0;
-        if(useBitExactness)
+        if(useInterpolation)
         {
             if(enablePackedLab)
             {
@@ -695,11 +690,15 @@ struct RGB2Lab_f
                     igvec = v_pack(igvec0, igvec1);
                     ibvec = v_pack(ibvec0, ibvec1);
 
-                    v_uint16x8 uirvec(irvec.val), uigvec(igvec.val), uibvec(ibvec.val);
+                    v_uint16x8 uirvec = v_reinterpret_as_u16(irvec);
+                    v_uint16x8 uigvec = v_reinterpret_as_u16(igvec);
+                    v_uint16x8 uibvec = v_reinterpret_as_u16(ibvec);
 
                     v_uint16x8 ui_lvec, ui_avec, ui_bvec;
                     trilinearPackedInterpolate(uirvec, uigvec, uibvec, RGB2LabLUT_s16, ui_lvec, ui_avec, ui_bvec);
-                    v_int16x8 i_lvec(ui_lvec.val), i_avec(ui_avec.val), i_bvec(ui_bvec.val);
+                    v_int16x8 i_lvec = v_reinterpret_as_s16(ui_lvec);
+                    v_int16x8 i_avec = v_reinterpret_as_s16(ui_avec);
+                    v_int16x8 i_bvec = v_reinterpret_as_s16(ui_bvec);
 
                     /* float L = iL*1.0f/LAB_BASE, a = ia*1.0f/LAB_BASE, b = ib*1.0f/LAB_BASE; */
                     v_int32x4 i_lvec0, i_avec0, i_bvec0, i_lvec1, i_avec1, i_bvec1;
@@ -779,7 +778,7 @@ struct RGB2Lab_f
     int srccn;
     float coeffs[9];
     bool srgb;
-    bool useBitExactness;
+    bool useInterpolation;
     int blueIdx;
 };
 
@@ -1399,9 +1398,9 @@ struct Lab2RGBinteger
                 v_expand(u8l, lvec0, lvec1);
                 v_expand(u8a, avec0, avec1);
                 v_expand(u8b, bvec0, bvec1);
-                v_int16x8 slvec0(lvec0.val), slvec1(lvec1.val);
-                v_int16x8 savec0(avec0.val), savec1(avec1.val);
-                v_int16x8 sbvec0(bvec0.val), sbvec1(bvec1.val);
+                v_int16x8 slvec0 = v_reinterpret_as_s16(lvec0), slvec1 = v_reinterpret_as_s16(lvec1);
+                v_int16x8 savec0 = v_reinterpret_as_s16(avec0), savec1 = v_reinterpret_as_s16(avec1);
+                v_int16x8 sbvec0 = v_reinterpret_as_s16(bvec0), sbvec1 = v_reinterpret_as_s16(bvec1);
                 v_int32x4  lvecs[4], avecs[4], bvecs[4];
                 v_expand(slvec0, lvecs[0], lvecs[1]); v_expand(slvec1, lvecs[2], lvecs[3]);
                 v_expand(savec0, avecs[0], avecs[1]); v_expand(savec1, avecs[2], avecs[3]);
@@ -1440,9 +1439,9 @@ struct Lab2RGBinteger
                 s_gvec0 = v_pack(g_vecs[0], g_vecs[1]), s_gvec1 = v_pack(g_vecs[2], g_vecs[3]);
                 s_bvec0 = v_pack(b_vecs[0], b_vecs[1]), s_bvec1 = v_pack(b_vecs[2], b_vecs[3]);
 
-                v_uint16x8 u_rvec0(s_rvec0.val), u_rvec1(s_rvec1.val);
-                v_uint16x8 u_gvec0(s_gvec0.val), u_gvec1(s_gvec1.val);
-                v_uint16x8 u_bvec0(s_bvec0.val), u_bvec1(s_bvec1.val);
+                v_uint16x8 u_rvec0 = v_reinterpret_as_u16(s_rvec0), u_rvec1 = v_reinterpret_as_u16(s_rvec1);
+                v_uint16x8 u_gvec0 = v_reinterpret_as_u16(s_gvec0), u_gvec1 = v_reinterpret_as_u16(s_gvec1);
+                v_uint16x8 u_bvec0 = v_reinterpret_as_u16(s_bvec0), u_bvec1 = v_reinterpret_as_u16(s_bvec1);
 
                 v_uint8x16 u8_b, u8_g, u8_r;
                 u8_b = v_pack(u_bvec0, u_bvec1);
@@ -1739,7 +1738,6 @@ struct Lab2RGB_f
 };
 
 #undef clip
-#undef DIV255
 
 /////////////
 
@@ -1751,11 +1749,11 @@ TEST(ImgProc_Color, LabCheckWorking)
     //cv::setUseOptimized(false);
 
     //settings
-    #define INT_DATA 1
-    #define TO_BGR 1
+    #define INT_DATA 0
+    #define TO_BGR 0
     const bool randomFill = true;
 
-    enableBitExactness = true;
+    enableBitExactness = true; enableRGB2LabInterpolation = true;
 
     int dstChannels = 3;
     int blueIdx = 0;
@@ -1764,7 +1762,7 @@ TEST(ImgProc_Color, LabCheckWorking)
     RGB2Lab_f interToLab  (dstChannels, blueIdx, 0, 0, srgb);
     Lab2RGB_b interToBgr_b(dstChannels, blueIdx, 0, 0, srgb);
     RGB2Lab_b interToLab_b(dstChannels, blueIdx, 0, 0, srgb);
-    enableBitExactness = false;
+    enableBitExactness = false; enableRGB2LabInterpolation = false;
     Lab2RGB_f goldToBgr  (dstChannels, blueIdx, 0, 0, srgb);
     RGB2Lab_f goldToLab  (dstChannels, blueIdx, 0, 0, srgb);
     Lab2RGB_b goldToBgr_b(dstChannels, blueIdx, 0, 0, srgb);
