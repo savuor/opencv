@@ -236,7 +236,7 @@ struct SignificantBits<0>
     static const uint bits = 0;
 };
 
-// v = v * mul/d + toAdd
+// v = v*mul/d + toAdd, d != 2^n, mul >= 0
 template<int w, long long int d, long long int mul, long long int toAdd>
 static inline int mulFracConst(int v)
 {
@@ -245,29 +245,17 @@ static inline int mulFracConst(int v)
         b = SignificantBits<d>::bits - 1,
         r = w + b,
         pmod = (1ll << r)%d,
-        f = (1ll << r)/d
+        f = (1ll << r)/d,
+        vfp1 = pmod*2 > d ? (f + 1) : f,
+        adc  = pmod*2 > d ? (1ll << (r - 1)) : f + (1ll << (r - 1))
     };
 
     long long int vl = v*mul;
-    if(pmod)
-    {
-        if(pmod*2 > d)
-        {
-            vl = toAdd + ((vl * (f + 1) + (1ll << (r - 1))) >> r);
-        }
-        else
-        {
-            vl = toAdd + (((vl + 1) * f + (1ll << (r - 1))) >> r);
-        }
-    }
-    else
-    {
-        vl = toAdd + ((vl + (1ll << (b - 1))) >> b);
-    }
+    vl = toAdd + ((vl * vfp1 + adc) >> r);
     return (int)vl;
 }
 
-// v = v * mul/d + toAdd, d shouldn't be 2^n
+// v = v*mul/d + toAdd, d != 2^n, mul >= 0
 template<int w, long long int d, long long int mul, int toAdd>
 static inline v_int32x4 mulFracConst(v_int32x4 v)
 {
@@ -278,45 +266,27 @@ static inline v_int32x4 mulFracConst(v_int32x4 v)
         pmod = (1ll << r)%d,
         f = (1ll << r)/d,
         // shifting neg values is UB according to std
-        shiftedToAdd = (long long int)(((unsigned long long int)(toAdd)) << r)
+        shiftedToAdd = (long long int)(((unsigned long long int)(toAdd)) << r),
+        vadc = (pmod*2 > d) ? ((1ll << (r - 1)) + shiftedToAdd) : (f + (1ll << (r - 1)) + shiftedToAdd),
+        vfp1 = (pmod*2 > d) ? (f + 1)*mul : f*mul
     };
+    v_uint32x4 fp1 = v_setall_u32(vfp1);
+    v_int64x2 adc = v_setall_s64(vadc);
+
     // v_mul_expand doesn't support signed int32 args
+    v_uint32x4 uv = v_reinterpret_as_u32(v);
+    v_uint64x2 uo0, uo1;
+    v_int64x2 sub0, sub1;
+    v_mul_expand(uv, fp1, uo0, uo1);
+    v_int32x4 vmask = v < v_setzero_s32();
+    v_int32x4 sfp1 = v_reinterpret_as_s32(fp1);
+    v_expand(v_select(vmask, sfp1, v_setzero_s32()), sub0, sub1);
+
     v_int64x2 v0, v1;
-    v_uint64x2 uv0, uv1;
-    v_uint32x4 av = v_abs(v);
-    v_int32x4 mask = v < v_setzero_s32();
-    v_int64x2 nv0, nv1;
-    v_int32x4 negOut;
-    v_int32x4 out;
-    v_uint32x4 fp1;
-    v_int64x2 adc;
-    if(pmod*2 > d)
-    {
-        fp1 = v_setall_u32((f + 1)*mul);
-        adc = v_setall_s64((1ll << (r - 1)) + shiftedToAdd);
-    }
-    else
-    {
-        fp1 = v_setall_u32(f*mul);
-        adc = v_setall_s64(f + (1ll << (r - 1)) + shiftedToAdd);
-    }
+    v0 = (v_reinterpret_as_s64(uo0) - (sub0 << 32) + adc) >> r;
+    v1 = (v_reinterpret_as_s64(uo1) - (sub1 << 32) + adc) >> r;
 
-    v_mul_expand(av, fp1, uv0, uv1);
-    v0 = v_reinterpret_as_s64(uv0); v1 = v_reinterpret_as_s64(uv1);
-
-    nv0 = v_setzero_s64() - v0;
-    nv1 = v_setzero_s64() - v1;
-
-    v0 = (v0 + adc) >> r;
-    v1 = (v1 + adc) >> r;
-    out = v_pack(v0, v1);
-
-    nv0 = (nv0 + adc) >> r;
-    nv1 = (nv1 + adc) >> r;
-    negOut = v_pack(nv0, nv1);
-
-    out = v_select(mask, negOut, out);
-    return out;
+    return v_pack(v0, v1);
 }
 
 #define clip(value) \
