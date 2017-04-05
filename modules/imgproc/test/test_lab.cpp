@@ -264,13 +264,15 @@ static inline int mulFracConst(int v)
 }
 
 // v = v * mul/d + toAdd, d shouldn't be 2^n
-template<int w, long long int d, long long int mul, long long int toAdd>
+template<int w, long long int d, long long int mul, int toAdd>
 static inline v_int32x4 mulFracConst(v_int32x4 v)
 {
     const int b = SignificantBits<d>::bits - 1;
     const int r = w + b;
     const int pmod = (1ll << r)%d;
     const int f = (1ll << r)/d;
+    // shifting neg values is UB according to std
+    const long long int shiftedToAdd = (long long int)(((unsigned long long int)(toAdd)) << r);
     // v_mul_expand doesn't support signed int32 args
     v_int64x2 v0, v1;
     v_uint64x2 uv0, uv1;
@@ -284,12 +286,12 @@ static inline v_int32x4 mulFracConst(v_int32x4 v)
     if(pmod*2 > d)
     {
         fp1 = v_setall_u32((f + 1)*mul);
-        adc = v_setall_s64((1ll << (r - 1)) + (toAdd << r));
+        adc = v_setall_s64((1ll << (r - 1)) + shiftedToAdd);
     }
     else
     {
         fp1 = v_setall_u32(f*mul);
-        adc = v_setall_s64(f + (1ll << (r - 1)) + (toAdd << r));
+        adc = v_setall_s64(f + (1ll << (r - 1)) + shiftedToAdd);
     }
 
     v_mul_expand(av, fp1, uv0, uv1);
