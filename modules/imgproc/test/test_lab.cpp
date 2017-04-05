@@ -242,23 +242,23 @@ static inline int mulFracConst(int v)
 {
     const int b = SignificantBits<d>::bits - 1;
     const int r = w + b;
-    const int pmod = (1l << r)%d;
-    const int f = (1l << r)/d;
+    const int pmod = (1ll << r)%d;
+    const int f = (1ll << r)/d;
     long long int vl = v*mul;
     if(pmod)
     {
         if(pmod*2 > d)
         {
-            vl = toAdd + ((vl * (f + 1) + (1l << (r - 1))) >> r);
+            vl = toAdd + ((vl * (f + 1) + (1ll << (r - 1))) >> r);
         }
         else
         {
-            vl = toAdd + (((vl + 1) * f + (1l << (r - 1))) >> r);
+            vl = toAdd + (((vl + 1) * f + (1ll << (r - 1))) >> r);
         }
     }
     else
     {
-        vl = toAdd + ((vl + (1l << (b - 1))) >> b);
+        vl = toAdd + ((vl + (1ll << (b - 1))) >> b);
     }
     return (int)vl;
 }
@@ -269,8 +269,8 @@ static inline v_int32x4 mulFracConst(v_int32x4 v)
 {
     const int b = SignificantBits<d>::bits - 1;
     const int r = w + b;
-    const int pmod = (1l << r)%d;
-    const int f = (1l << r)/d;
+    const int pmod = (1ll << r)%d;
+    const int f = (1ll << r)/d;
     // v_mul_expand doesn't support signed int32 args
     v_int64x2 v0, v1;
     v_uint64x2 uv0, uv1;
@@ -284,12 +284,12 @@ static inline v_int32x4 mulFracConst(v_int32x4 v)
     if(pmod*2 > d)
     {
         fp1 = v_setall_u32((f + 1)*mul);
-        adc = v_setall_s64((1l << (r - 1)) + (toAdd << r));
+        adc = v_setall_s64((1ll << (r - 1)) + (toAdd << r));
     }
     else
     {
         fp1 = v_setall_u32(f*mul);
-        adc = v_setall_s64(f + (1l << (r - 1)) + (toAdd << r));
+        adc = v_setall_s64(f + (1ll << (r - 1)) + (toAdd << r));
     }
 
     v_mul_expand(av, fp1, uv0, uv1);
@@ -1187,7 +1187,7 @@ struct Lab2RGBinteger
                 v = v*v/BASE*v/BASE;
             }
         }
-        x = ifxz[0]; y = y; z = ifxz[1];
+        x = ifxz[0]; /* y = y */; z = ifxz[1];
 
         int C0 = coeffs[0], C1 = coeffs[1], C2 = coeffs[2];
         int C3 = coeffs[3], C4 = coeffs[4], C5 = coeffs[5];
