@@ -2146,4 +2146,3 @@ TEST(ImgProc_Color, LabCheckWorking)
     std::cout << "gold rgb2lab: "  << times[3] << " ";
     std::cout << std::endl;
 }
-
