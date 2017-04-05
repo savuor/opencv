@@ -1744,7 +1744,7 @@ struct Lab2RGB_f
 TEST(ImgProc_Color, LabCheckWorking)
 {
     //TODO: make good test
-    //return;
+    return;
 
     //cv::setUseOptimized(false);
 
