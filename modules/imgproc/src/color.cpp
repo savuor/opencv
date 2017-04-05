@@ -5824,10 +5824,14 @@ struct SignificantBits<0>
 template<int w, long long int d, long long int mul, long long int toAdd>
 static inline int mulFracConst(int v)
 {
-    const int b = SignificantBits<d>::bits - 1;
-    const int r = w + b;
-    const int pmod = (1ll << r)%d;
-    const int f = (1ll << r)/d;
+    enum
+    {
+        b = SignificantBits<d>::bits - 1,
+        r = w + b,
+        pmod = (1ll << r)%d,
+        f = (1ll << r)/d
+    };
+
     long long int vl = v*mul;
     if(pmod)
     {
@@ -5851,12 +5855,15 @@ static inline int mulFracConst(int v)
 template<int w, long long int d, long long int mul, int toAdd>
 static inline v_int32x4 mulFracConst(v_int32x4 v)
 {
-    const int b = SignificantBits<d>::bits - 1;
-    const int r = w + b;
-    const int pmod = (1ll << r)%d;
-    const int f = (1ll << r)/d;
-    // shifting neg values is UB according to std
-    const long long int shiftedToAdd = (long long int)(((unsigned long long int)(toAdd)) << r);
+    enum
+    {
+        b = SignificantBits<d>::bits - 1,
+        r = w + b,
+        pmod = (1ll << r)%d,
+        f = (1ll << r)/d,
+        // shifting neg values is UB according to std
+        shiftedToAdd = (long long int)(((unsigned long long int)(toAdd)) << r)
+    };
     // v_mul_expand doesn't support signed int32 args
     v_int64x2 v0, v1;
     v_uint64x2 uv0, uv1;
@@ -6386,9 +6393,9 @@ struct Lab2RGBinteger
         //TODO: make these calculations in integers
         for(int i = 0; i < 3; i++)
         {
-            coeffs[i+(blueIdx)*3]   = cvRound((1 << lab_shift)*_coeffs[i  ]*_whitept[i]);
-            coeffs[i+3]             = cvRound((1 << lab_shift)*_coeffs[i+3]*_whitept[i]);
-            coeffs[i+(blueIdx^2)*3] = cvRound((1 << lab_shift)*_coeffs[i+6]*_whitept[i]);
+            coeffs[i+(blueIdx)*3]   = cvRound((float)(1 << lab_shift)*_coeffs[i  ]*_whitept[i]);
+            coeffs[i+3]             = cvRound((float)(1 << lab_shift)*_coeffs[i+3]*_whitept[i]);
+            coeffs[i+(blueIdx^2)*3] = cvRound((float)(1 << lab_shift)*_coeffs[i+6]*_whitept[i]);
         }
 
          tab = srgb ? sRGBInvGammaTab_b : linearInvGammaTab_b;
@@ -6729,7 +6736,7 @@ struct Lab2RGBinteger
     }
 
     int dstcn;
-    float coeffs[9];
+    int coeffs[9];
     ushort* tab;
 };
 

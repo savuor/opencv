@@ -240,10 +240,14 @@ struct SignificantBits<0>
 template<int w, long long int d, long long int mul, long long int toAdd>
 static inline int mulFracConst(int v)
 {
-    const int b = SignificantBits<d>::bits - 1;
-    const int r = w + b;
-    const int pmod = (1ll << r)%d;
-    const int f = (1ll << r)/d;
+    enum
+    {
+        b = SignificantBits<d>::bits - 1,
+        r = w + b,
+        pmod = (1ll << r)%d,
+        f = (1ll << r)/d
+    };
+
     long long int vl = v*mul;
     if(pmod)
     {
@@ -267,12 +271,15 @@ static inline int mulFracConst(int v)
 template<int w, long long int d, long long int mul, int toAdd>
 static inline v_int32x4 mulFracConst(v_int32x4 v)
 {
-    const int b = SignificantBits<d>::bits - 1;
-    const int r = w + b;
-    const int pmod = (1ll << r)%d;
-    const int f = (1ll << r)/d;
-    // shifting neg values is UB according to std
-    const long long int shiftedToAdd = (long long int)(((unsigned long long int)(toAdd)) << r);
+    enum
+    {
+        b = SignificantBits<d>::bits - 1,
+        r = w + b,
+        pmod = (1ll << r)%d,
+        f = (1ll << r)/d,
+        // shifting neg values is UB according to std
+        shiftedToAdd = (long long int)(((unsigned long long int)(toAdd)) << r)
+    };
     // v_mul_expand doesn't support signed int32 args
     v_int64x2 v0, v1;
     v_uint64x2 uv0, uv1;
@@ -401,9 +408,9 @@ static void initLabTabs()
                     for(int r = 0; r < LAB_LUT_DIM; r++)
                     {
                         //RGB 2 Lab LUT building
-                        float R = 1.0*p/(LAB_LUT_DIM-1);
-                        float G = 1.0*q/(LAB_LUT_DIM-1);
-                        float B = 1.0*r/(LAB_LUT_DIM-1);
+                        float R = 1.0f*p/(LAB_LUT_DIM-1);
+                        float G = 1.0f*q/(LAB_LUT_DIM-1);
+                        float B = 1.0f*r/(LAB_LUT_DIM-1);
 
                         R = applyGamma(R);
                         G = applyGamma(G);
@@ -422,9 +429,9 @@ static void initLabTabs()
                         float b = 200.f * (FY - FZ);
 
                         int idx = p*3 + q*LAB_LUT_DIM*3 + r*LAB_LUT_DIM*LAB_LUT_DIM*3;
-                        RGB2Labprev[idx]   = cvRound(LAB_BASE*L/100.0f);
-                        RGB2Labprev[idx+1] = cvRound(LAB_BASE*(a+128.0f)/256.0f);
-                        RGB2Labprev[idx+2] = cvRound(LAB_BASE*(b+128.0f)/256.0f);
+                        RGB2Labprev[idx]   = (int16_t)cvRound(LAB_BASE*L/100.0f);
+                        RGB2Labprev[idx+1] = (int16_t)cvRound(LAB_BASE*(a+128.0f)/256.0f);
+                        RGB2Labprev[idx+2] = (int16_t)cvRound(LAB_BASE*(b+128.0f)/256.0f);
                     }
                 }
             }
@@ -453,13 +460,13 @@ static void initLabTabs()
                 }
             }
 
-            for(int p = 0; p < TRILINEAR_BASE; p++)
+            for(int16_t p = 0; p < TRILINEAR_BASE; p++)
             {
                 int16_t pp = TRILINEAR_BASE - p;
-                for(int q = 0; q < TRILINEAR_BASE; q++)
+                for(int16_t q = 0; q < TRILINEAR_BASE; q++)
                 {
                     int16_t qq = TRILINEAR_BASE - q;
-                    for(int r = 0; r < TRILINEAR_BASE; r++)
+                    for(int16_t r = 0; r < TRILINEAR_BASE; r++)
                     {
                         int16_t rr = TRILINEAR_BASE - r;
                         int16_t* w = &trilinearLUT[8*p + 8*TRILINEAR_BASE*q + 8*TRILINEAR_BASE*TRILINEAR_BASE*r];
@@ -736,7 +743,8 @@ struct RGB2Lab_f
                 float G = clip(src[1]);
                 float B = clip(src[bIdx^2]);
 
-                int iR = R*LAB_BASE, iG = G*LAB_BASE, iB = B*LAB_BASE, iL, ia, ib;
+                int iR = cvRound(R*LAB_BASE), iG = cvRound(G*LAB_BASE), iB = cvRound(B*LAB_BASE);
+                int iL, ia, ib;
                 trilinearInterpolate(iR, iG, iB, RGB2LabLUT_s16, iL, ia, ib);
                 float L = iL*1.0f/LAB_BASE, a = ia*1.0f/LAB_BASE, b = ib*1.0f/LAB_BASE;
 
@@ -1136,9 +1144,9 @@ struct Lab2RGBinteger
         //TODO: make these calculations in integers
         for(int i = 0; i < 3; i++)
         {
-            coeffs[i+(blueIdx)*3]   = cvRound((1 << lab_shift)*_coeffs[i  ]*_whitept[i]);
-            coeffs[i+3]             = cvRound((1 << lab_shift)*_coeffs[i+3]*_whitept[i]);
-            coeffs[i+(blueIdx^2)*3] = cvRound((1 << lab_shift)*_coeffs[i+6]*_whitept[i]);
+            coeffs[i+(blueIdx)*3]   = cvRound((float)(1 << lab_shift)*_coeffs[i  ]*_whitept[i]);
+            coeffs[i+3]             = cvRound((float)(1 << lab_shift)*_coeffs[i+3]*_whitept[i]);
+            coeffs[i+(blueIdx^2)*3] = cvRound((float)(1 << lab_shift)*_coeffs[i+6]*_whitept[i]);
         }
 
          tab = srgb ? sRGBInvGammaTab_b : linearInvGammaTab_b;
@@ -1479,7 +1487,7 @@ struct Lab2RGBinteger
     }
 
     int dstcn;
-    float coeffs[9];
+    int coeffs[9];
     ushort* tab;
 };
 
