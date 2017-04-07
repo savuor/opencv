@@ -5834,6 +5834,7 @@ static inline int mulFracConst(int v)
         adc  = pmod*2 > d ? (1ll << (r - 1)) : f + (1ll << (r - 1))
     };
 
+    //v = toAdd + mul*CV_DESCALE((pmod*2 > d) ? v*(f+1) : (v+1)*f, r);
     long long int vl = v*mul;
     vl = toAdd + ((vl * vfp1 + adc) >> r);
     return (int)vl;
