@@ -5849,15 +5849,11 @@ static inline v_int32x4 mulFracConst(v_int32x4 v)
         b = SignificantBits<d>::bits - 1,
         r = w + b,
         pmod = (1ll << r)%d,
-        f = (1ll << r)/d,
-        // shifting neg values is UB according to std
-        shiftedToAdd = (long long int)(((unsigned long long int)(toAdd)) << r),
-        vadc = (pmod*2 > d) ? ((1ll << (r - 1)) + shiftedToAdd) : (f + (1ll << (r - 1)) + shiftedToAdd),
-        vfp1 = (pmod*2 > d) ? (f + 1)*mul : f*mul
+        f = (1ll << r)/d
     };
-    v_uint32x4 fp1 = v_setall_u32(vfp1);
-    v_int64x2 adc = v_setall_s64(vadc);
-
+    static const long long int vadc = (pmod * 2 > d) ? (1ll << (r - 1)) : (f + (1ll << (r - 1)));
+    static const long long int vfp1 = (pmod * 2 > d) ? (f + 1)*mul : f*mul;
+    v_uint32x4 fp1 = v_setall_u32((unsigned int)vfp1);
     // v_mul_expand doesn't support signed int32 args
     v_uint32x4 uv = v_reinterpret_as_u32(v);
     v_uint64x2 uo0, uo1;
@@ -5868,8 +5864,9 @@ static inline v_int32x4 mulFracConst(v_int32x4 v)
     v_expand(v_select(vmask, sfp1, v_setzero_s32()), sub0, sub1);
 
     v_int64x2 v0, v1;
-    v0 = (v_reinterpret_as_s64(uo0) - (sub0 << 32) + adc) >> r;
-    v1 = (v_reinterpret_as_s64(uo1) - (sub1 << 32) + adc) >> r;
+    v_int64x2 adc = v_setall_s64(vadc), vplus = v_setall_s64(toAdd);
+    v0 = vplus + ((v_reinterpret_as_s64(uo0) - (sub0 << 32) + adc) >> r);
+    v1 = vplus + ((v_reinterpret_as_s64(uo1) - (sub1 << 32) + adc) >> r);
 
     return v_pack(v0, v1);
 }
@@ -6692,7 +6689,9 @@ struct Lab2RGBinteger
         for (; i < n*3; i += 3, dst += dcn)
         {
             int ro, go, bo;
-            int L = src[i + 0]*BASE/255;
+            //int L = src[i + 0]*BASE/255;
+            //no truncation at division
+            int L = mulFracConst<14, 255, BASE, 0>(src[i + 0]);
             int a = (src[i + 1] - 128)*BASE/256;
             int b = (src[i + 2] - 128)*BASE/256;
 
