@@ -411,7 +411,10 @@ static void initLabTabs()
                     {
                         #define FILL(_p, _q, _r) \
                         do {\
-                            int idxold = (p+(_p))*3 + (q+(_q))*LAB_LUT_DIM*3 + (r+(_r))*LAB_LUT_DIM*LAB_LUT_DIM*3;\
+                            int idxold = 0;\
+                            idxold += min(p+(_p), LAB_LUT_DIM)*3;\
+                            idxold += min(q+(_q), LAB_LUT_DIM)*LAB_LUT_DIM*3;\
+                            idxold += min(r+(_r), LAB_LUT_DIM)*LAB_LUT_DIM*LAB_LUT_DIM*3;\
                             int idxnew = p*3*8 + q*LAB_LUT_DIM*3*8 + r*LAB_LUT_DIM*LAB_LUT_DIM*3*8+4*(_p)+2*(_q)+(_r);\
                             RGB2LabLUT_s16[idxnew]    = RGB2Labprev[idxold];\
                             RGB2LabLUT_s16[idxnew+8]  = RGB2Labprev[idxold+1];\
@@ -1746,7 +1749,9 @@ TEST(ImgProc_Color, LabCheckWorking)
 
     int nPerfIters = 100;
 
-    string dir = "/home/savuor/logs/ocv/lab_precision/" + string(TO_BGR ? "lab2bgr/" : "rgb2lab/");
+    string dir;
+    dir = "/home/savuor/logs/ocv/lab_precision/";
+    dir += string(TO_BGR ? "lab2bgr/" : "rgb2lab/");
 
     const size_t pSize = 256+1;
     Mat  mGold(pSize, pSize, CV_32FC3);
