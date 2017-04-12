@@ -412,9 +412,9 @@ static void initLabTabs()
                         #define FILL(_p, _q, _r) \
                         do {\
                             int idxold = 0;\
-                            idxold += min(p+(_p), LAB_LUT_DIM)*3;\
-                            idxold += min(q+(_q), LAB_LUT_DIM)*LAB_LUT_DIM*3;\
-                            idxold += min(r+(_r), LAB_LUT_DIM)*LAB_LUT_DIM*LAB_LUT_DIM*3;\
+                            idxold += min(p+(_p), (int)LAB_LUT_DIM)*3;\
+                            idxold += min(q+(_q), (int)LAB_LUT_DIM)*LAB_LUT_DIM*3;\
+                            idxold += min(r+(_r), (int)LAB_LUT_DIM)*LAB_LUT_DIM*LAB_LUT_DIM*3;\
                             int idxnew = p*3*8 + q*LAB_LUT_DIM*3*8 + r*LAB_LUT_DIM*LAB_LUT_DIM*3*8+4*(_p)+2*(_q)+(_r);\
                             RGB2LabLUT_s16[idxnew]    = RGB2Labprev[idxold];\
                             RGB2LabLUT_s16[idxnew+8]  = RGB2Labprev[idxold+1];\
@@ -1719,13 +1719,13 @@ struct Lab2RGB_f
 TEST(ImgProc_Color, LabCheckWorking)
 {
     //TODO: make good test
-    return;
+    //return;
 
     //cv::setUseOptimized(false);
 
     //settings
-    #define INT_DATA 0
-    #define TO_BGR 0
+    #define INT_DATA 1
+    #define TO_BGR 1
     const bool randomFill = true;
 
     enableBitExactness = true; enableRGB2LabInterpolation = true;
