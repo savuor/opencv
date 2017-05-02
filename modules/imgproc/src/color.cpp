@@ -95,6 +95,9 @@
 #include <limits>
 #include "hal_replacement.hpp"
 #include "opencv2/core/hal/intrin.hpp"
+#include "opencv2/core/softfloat.hpp"
+
+using namespace cv::softfloat;
 
 #define  CV_DESCALE(x,n)     (((x) + (1 << ((n)-1))) >> (n))
 
@@ -3447,25 +3450,25 @@ struct YCrCb2RGB_i<uchar>
 
 ////////////////////////////////////// RGB <-> XYZ ///////////////////////////////////////
 
-static const float sRGB2XYZ_D65[] =
+static const float32_t sRGB2XYZ_D65[] =
 {
-    0.412453f, 0.357580f, 0.180423f,
-    0.212671f, 0.715160f, 0.072169f,
-    0.019334f, 0.119193f, 0.950227f
+    float_to_f32(0.412453f), float_to_f32(0.357580f), float_to_f32(0.180423f),
+    float_to_f32(0.212671f), float_to_f32(0.715160f), float_to_f32(0.072169f),
+    float_to_f32(0.019334f), float_to_f32(0.119193f), float_to_f32(0.950227f)
 };
 
-static const float XYZ2sRGB_D65[] =
+static const float32_t XYZ2sRGB_D65[] =
 {
-    3.240479f, -1.53715f, -0.498535f,
-    -0.969256f, 1.875991f, 0.041556f,
-    0.055648f, -0.204043f, 1.057311f
+    float_to_f32(3.240479f),  float_to_f32(-1.53715f),  float_to_f32(-0.498535f),
+    float_to_f32(-0.969256f), float_to_f32(1.875991f),  float_to_f32(0.041556f),
+    float_to_f32(0.055648f),  float_to_f32(-0.204043f), float_to_f32(1.057311f)
 };
 
 template<typename _Tp> struct RGB2XYZ_f
 {
     typedef _Tp channel_type;
 
-    RGB2XYZ_f(int _srccn, int blueIdx, const float* _coeffs) : srccn(_srccn)
+    RGB2XYZ_f(int _srccn, int blueIdx, const float32_t* _coeffs) : srccn(_srccn)
     {
         memcpy(coeffs, _coeffs ? _coeffs : sRGB2XYZ_D65, 9*sizeof(coeffs[0]));
         if(blueIdx == 0)
