@@ -50,7 +50,6 @@
 
 using namespace cv;
 using namespace std;
-using namespace softfloat;
 
 // computes cubic spline coefficients for a function: (xi=i, yi=f[i]), i=0..n
 template<typename _Tp> static void splineBuild(const _Tp* f, int n, _Tp* tab)
@@ -162,18 +161,18 @@ template<> struct ColorChannel<float>
 
 ///////////
 
-static const float32_t sRGB2XYZ_D65[] =
+static const float sRGB2XYZ_D65[] =
 {
-    float_to_f32(0.412453f), float_to_f32(0.357580f), float_to_f32(0.180423f),
-    float_to_f32(0.212671f), float_to_f32(0.715160f), float_to_f32(0.072169f),
-    float_to_f32(0.019334f), float_to_f32(0.119193f), float_to_f32(0.950227f)
+    0.412453f, 0.357580f, 0.180423f,
+    0.212671f, 0.715160f, 0.072169f,
+    0.019334f, 0.119193f, 0.950227f
 };
 
-static const float32_t XYZ2sRGB_D65[] =
+static const float XYZ2sRGB_D65[] =
 {
-    float_to_f32(3.240479f),  float_to_f32(-1.53715f),  float_to_f32(-0.498535f),
-    float_to_f32(-0.969256f), float_to_f32(1.875991f),  float_to_f32(0.041556f),
-    float_to_f32(0.055648f),  float_to_f32(-0.204043f), float_to_f32(1.057311f)
+    3.240479f, -1.53715f, -0.498535f,
+   -0.969256f,  1.875991f, 0.041556f,
+    0.055648f, -0.204043f, 1.057311f
 };
 
 enum
@@ -193,14 +192,14 @@ static const float _1_3f = static_cast<float>(_1_3);
 
 ///////////////////////////////////// RGB <-> L*a*b* /////////////////////////////////////
 
-static const float32_t D65[] = { float_to_f32(0.950456f), float_to_f32(1.f), float_to_f32(1.088754f) };
+static const float D65[] = { 0.950456f, 1.f, 1.088754f };
 
 enum { LAB_CBRT_TAB_SIZE = 1024, GAMMA_TAB_SIZE = 1024 };
 static float LabCbrtTab[LAB_CBRT_TAB_SIZE*4];
-static const float32_t LabCbrtTabScale = i32_to_f32(LAB_CBRT_TAB_SIZE)/float_to_f32(1.5f);
+static const float LabCbrtTabScale(LAB_CBRT_TAB_SIZE*3/2);
 
 static float sRGBGammaTab[GAMMA_TAB_SIZE*4], sRGBInvGammaTab[GAMMA_TAB_SIZE*4];
-static const float32_t GammaTabScale = i32_to_f32(GAMMA_TAB_SIZE);
+static const float GammaTabScale((int)GAMMA_TAB_SIZE);
 
 static ushort sRGBGammaTab_b[256], linearGammaTab_b[256];
 enum { inv_gamma_shift = 12, INV_GAMMA_TAB_SIZE = (1 << inv_gamma_shift) };
@@ -293,22 +292,18 @@ static inline v_int32x4 mulFracConst(v_int32x4 v)
 #define clip(value) \
     value < 0.0f ? 0.0f : value > 1.0f ? 1.0f : value;
 
-static inline float32_t applyGamma(float32_t x)
+static inline softfloat32_t applyGamma(softfloat32_t x)
 {
     //return x <= 0.04045f ? x*(1.f/12.92f) : (float)std::pow((double)(x + 0.055)*(1./1.055), 2.4);
-    float64_t xd = f32_to_f64(x);
-    return f64_to_f32(xd <= double_to_f64(0.04045) ?
-                      xd*double_to_f64(1./12.92) :
-                      f64_pow((xd + double_to_f64(0.055))*double_to_f64(1./1.055), double_to_f64(2.4)));
+    softfloat64_t xd = x.toF64();
+    return (xd <= 0.04045 ? xd/12.92 : f64_pow((xd + 0.055)/1.055, 2.4)).toF32();
 }
 
-static inline float32_t applyInvGamma(float32_t x)
+static inline softfloat32_t applyInvGamma(softfloat32_t x)
 {
     //return x <= 0.0031308 ? x*12.92f : (float)(1.055*std::pow((double)x, 1./2.4) - 0.055);
-    float64_t xd = f32_to_f64(x);
-    return f64_to_f32(xd <= double_to_f64(0.0031308) ?
-                      xd*double_to_f64(12.92) :
-                      double_to_f64(1.055)*f64_pow(xd, double_to_f64(1./2.4)) - double_to_f64(0.055));
+    softfloat64_t xd = x.toF64();
+    return (xd <= 0.0031308 ? xd*12.92 : f64_pow(xd, softfloat64_t::one()/2.4)*1.055 - 0.055).toF32();
 }
 
 static void initLabTabs()
@@ -316,77 +311,78 @@ static void initLabTabs()
     static bool initialized = false;
     if(!initialized)
     {
+        static const softfloat32_t lthresh(0.008856f), lscale(7.787f);
+        static const softfloat32_t lbias = softfloat32_t(16.f) / 116.f;
+        static const softfloat32_t f255(255);
+
         float f[LAB_CBRT_TAB_SIZE+1], g[GAMMA_TAB_SIZE+1], ig[GAMMA_TAB_SIZE+1];
-        float32_t scale = i32_to_f32(1)/LabCbrtTabScale;
+        softfloat32_t scale = softfloat32_t::one()/LabCbrtTabScale;
         int i;
         for(i = 0; i <= LAB_CBRT_TAB_SIZE; i++)
         {
-            float32_t x = i32_to_f32(i)*scale;
-            f[i] = f32_to_float(x < float_to_f32(0.008856f) ?
-                                x*float_to_f32(7.787f) + float_to_f32(0.13793103448275862f) :
-                                f32_cbrt(x));
+            softfloat32_t x = scale*i;
+            f[i] = (x < lthresh ? f32_mulAdd(x, lscale, lbias) : f32_cbrt(x)).toFloat();
         }
         splineBuild(f, LAB_CBRT_TAB_SIZE, LabCbrtTab);
 
-        scale = i32_to_f32(1)/GammaTabScale;
+        scale = softfloat32_t::one()/GammaTabScale;
         for(i = 0; i <= GAMMA_TAB_SIZE; i++)
         {
-            float32_t x = i32_to_f32(i)*scale;
-            g[i] = f32_to_float(applyGamma(x));
-            ig[i] = f32_to_float(applyInvGamma(x));
+            softfloat32_t x = scale*i;
+            g[i] = applyGamma(x).toFloat();
+            ig[i] = applyInvGamma(x).toFloat();
         }
         splineBuild(g, GAMMA_TAB_SIZE, sRGBGammaTab);
         splineBuild(ig, GAMMA_TAB_SIZE, sRGBInvGammaTab);
 
+        static const softfloat32_t intScale(255*(1 << gamma_shift));
         for(i = 0; i < 256; i++)
         {
-            float32_t x = i32_to_f32(i)*float_to_f32(1.f/255.f);
-            sRGBGammaTab_b[i] = (ushort)f32_to_i32(i32_to_f32(255*(1 << gamma_shift))*applyGamma(x), round_near_even, false);
+            softfloat32_t x = softfloat32_t(i)/f255;
+            sRGBGammaTab_b[i] = (ushort)((intScale*applyGamma(x)).toI32());
             linearGammaTab_b[i] = (ushort)(i*(1 << gamma_shift));
         }
-        float32_t invScale = i32_to_f32(1)/i32_to_f32(INV_GAMMA_TAB_SIZE);
+        static const softfloat32_t invScale = softfloat32_t::one()/INV_GAMMA_TAB_SIZE;
         for(i = 0; i < INV_GAMMA_TAB_SIZE; i++)
         {
-            float32_t x = i32_to_f32(i)*invScale;
-            sRGBInvGammaTab_b[i] = (ushort)f32_to_i32(i32_to_f32(255)*applyInvGamma(x), round_near_even, false);
-            linearInvGammaTab_b[i] = (ushort)f32_to_i32(i32_to_f32(255)*x, round_near_even, false);
+            softfloat32_t x = invScale*i;
+            sRGBInvGammaTab_b[i] = (ushort)((f255*applyInvGamma(x)).toI32());
+            linearInvGammaTab_b[i] = (ushort)((f255*x).toI32());
         }
 
+        static const softfloat32_t cbTabScale(softfloat32_t::one()/(f255*(1 << gamma_shift)));
+        static const softfloat32_t lshift2(1 << lab_shift2);
         for(i = 0; i < LAB_CBRT_TAB_SIZE_B; i++)
         {
-            float32_t x = i32_to_f32(i)*float_to_f32(1.f/(255.f*(1 << gamma_shift)));
-            LabCbrtTab_b[i] = (ushort)f32_to_i32(i32_to_f32(1 << lab_shift2)*(x < float_to_f32(0.008856f) ?
-                                                                              f32_mulAdd(x, float_to_f32(7.787f),
-                                                                                         float_to_f32(0.13793103448275862f)) :
-                                                                              f32_cbrt(x)), round_near_even, false);
+            softfloat32_t x = cbTabScale*i;
+            LabCbrtTab_b[i] = (ushort)((lshift2 * (x < lthresh ? f32_mulAdd(x, lscale, lbias) : f32_cbrt(x))).toI32());
         }
 
         if(enableRGB2LabInterpolation)
         {
-            static const float32_t _a = float_to_f32(16.0f / 116.0f);
-
-            const float32_t* _whitept = D65;
-            float32_t coeffs[9];
+            const float* _whitept = D65;
+            softfloat32_t coeffs[9];
 
             //RGB2Lab coeffs
-            float32_t scaleWhite[] = { i32_to_f32(1)/_whitept[0],
-                                       i32_to_f32(1),
-                                       i32_to_f32(1)/_whitept[2] };
+            softfloat32_t scaleWhite[] = { softfloat32_t::one()/_whitept[0],
+                                           softfloat32_t::one(),
+                                           softfloat32_t::one()/_whitept[2] };
 
             for(i = 0; i < 3; i++ )
             {
                 int j = i * 3;
-                coeffs[j + 2] = sRGB2XYZ_D65[j]     * scaleWhite[i];
-                coeffs[j + 1] = sRGB2XYZ_D65[j + 1] * scaleWhite[i];
-                coeffs[j + 0] = sRGB2XYZ_D65[j + 2] * scaleWhite[i];
+                coeffs[j + 2] = scaleWhite[i] * sRGB2XYZ_D65[j]    ;
+                coeffs[j + 1] = scaleWhite[i] * sRGB2XYZ_D65[j + 1];
+                coeffs[j + 0] = scaleWhite[i] * sRGB2XYZ_D65[j + 2];
             }
 
-            float32_t D0 = coeffs[0], D1 = coeffs[1], D2 = coeffs[2],
-                      D3 = coeffs[3], D4 = coeffs[4], D5 = coeffs[5],
-                      D6 = coeffs[6], D7 = coeffs[7], D8 = coeffs[8];
+            softfloat32_t D0 = coeffs[0], D1 = coeffs[1], D2 = coeffs[2],
+                          D3 = coeffs[3], D4 = coeffs[4], D5 = coeffs[5],
+                          D6 = coeffs[6], D7 = coeffs[7], D8 = coeffs[8];
 
+            static const softfloat32_t lld(LAB_LUT_DIM - 1), f116(116), f16(16), f500(500), f200(200);
+            static const softfloat32_t f100(100), f128(128), f256(256), lbase((int)LAB_BASE), f9033(903.3f);
             AutoBuffer<int16_t> RGB2Labprev(LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3);
-
             for(int p = 0; p < LAB_LUT_DIM; p++)
             {
                 for(int q = 0; q < LAB_LUT_DIM; q++)
@@ -394,30 +390,30 @@ static void initLabTabs()
                     for(int r = 0; r < LAB_LUT_DIM; r++)
                     {
                         //RGB 2 Lab LUT building
-                        float32_t R = i32_to_f32(p)/i32_to_f32(LAB_LUT_DIM-1);
-                        float32_t G = i32_to_f32(q)/i32_to_f32(LAB_LUT_DIM-1);
-                        float32_t B = i32_to_f32(r)/i32_to_f32(LAB_LUT_DIM-1);
+                        softfloat32_t R = softfloat32_t(p)/lld;
+                        softfloat32_t G = softfloat32_t(q)/lld;
+                        softfloat32_t B = softfloat32_t(r)/lld;
 
                         R = applyGamma(R);
                         G = applyGamma(G);
                         B = applyGamma(B);
 
-                        float32_t X = R*D0 + G*D1 + B*D2;
-                        float32_t Y = R*D3 + G*D4 + B*D5;
-                        float32_t Z = R*D6 + G*D7 + B*D8;
+                        softfloat32_t X = R*D0 + G*D1 + B*D2;
+                        softfloat32_t Y = R*D3 + G*D4 + B*D5;
+                        softfloat32_t Z = R*D6 + G*D7 + B*D8;
 
-                        float32_t FX = X > float_to_f32(0.008856f) ? f32_cbrt(X) : (float_to_f32(7.787f) * X + _a);
-                        float32_t FY = Y > float_to_f32(0.008856f) ? f32_cbrt(Y) : (float_to_f32(7.787f) * Y + _a);
-                        float32_t FZ = Z > float_to_f32(0.008856f) ? f32_cbrt(Z) : (float_to_f32(7.787f) * Z + _a);
+                        softfloat32_t FX = X > lthresh ? f32_cbrt(X) : f32_mulAdd(X, lscale, lbias);
+                        softfloat32_t FY = Y > lthresh ? f32_cbrt(Y) : f32_mulAdd(Y, lscale, lbias);
+                        softfloat32_t FZ = Z > lthresh ? f32_cbrt(Z) : f32_mulAdd(Z, lscale, lbias);
 
-                        float32_t L = Y > float_to_f32(0.008856f) ? (i32_to_f32(116)*FY-i32_to_f32(16)) : (float_to_f32(903.3)*Y);
-                        float32_t a = i32_to_f32(500) * (FX - FY);
-                        float32_t b = i32_to_f32(200) * (FY - FZ);
+                        softfloat32_t L = Y > lthresh ? (f116*FY - f16) : (f9033*Y);
+                        softfloat32_t a = f500 * (FX - FY);
+                        softfloat32_t b = f200 * (FY - FZ);
 
                         int idx = p*3 + q*LAB_LUT_DIM*3 + r*LAB_LUT_DIM*LAB_LUT_DIM*3;
-                        RGB2Labprev[idx]   = (int16_t)f32_to_i32(i32_to_f32(LAB_BASE)*L/i32_to_f32(100), round_near_even, false);
-                        RGB2Labprev[idx+1] = (int16_t)f32_to_i32(i32_to_f32(LAB_BASE)*(a + i32_to_f32(128))/i32_to_f32(256), round_near_even, false);
-                        RGB2Labprev[idx+2] = (int16_t)f32_to_i32(i32_to_f32(LAB_BASE)*(b + i32_to_f32(128))/i32_to_f32(256), round_near_even, false);
+                        RGB2Labprev[idx]   = (int16_t)((lbase*L/f100).toI32());
+                        RGB2Labprev[idx+1] = (int16_t)((lbase*(a + f128)/f256).toI32());
+                        RGB2Labprev[idx+2] = (int16_t)((lbase*(b + f128)/f256).toI32());
                     }
                 }
             }
@@ -601,8 +597,8 @@ struct RGB2Lab_f
 {
     typedef float channel_type;
 
-    RGB2Lab_f(int _srccn, int _blueIdx, const float32_t* _coeffs,
-              const float32_t* _whitept, bool _srgb)
+    RGB2Lab_f(int _srccn, int _blueIdx, const float* _coeffs,
+              const float* _whitept, bool _srgb)
     : srccn(_srccn), srgb(_srgb), blueIdx(_blueIdx)
     {
         volatile int _3 = 3;
@@ -615,26 +611,27 @@ struct RGB2Lab_f
         if (!_whitept)
             _whitept = D65;
 
-        float32_t scale[] = { i32_to_f32(1) / _whitept[0],
-                              i32_to_f32(1),
-                              i32_to_f32(1) / _whitept[2] };
+        softfloat32_t scale[] = { softfloat32_t::one() / _whitept[0],
+                                  softfloat32_t::one(),
+                                  softfloat32_t::one() / _whitept[2] };
 
         for( int i = 0; i < _3; i++ )
         {
             int j = i * 3;
-            coeffs[j + (blueIdx ^ 2)] = f32_to_float(_coeffs[j] * scale[i]);
-            coeffs[j + 1]             = f32_to_float(_coeffs[j + 1] * scale[i]);
-            coeffs[j + blueIdx]       = f32_to_float(_coeffs[j + 2] * scale[i]);
+            coeffs[j + (blueIdx ^ 2)] = (scale[i] * _coeffs[j]    ).toFloat();
+            coeffs[j + 1]             = (scale[i] * _coeffs[j + 1]).toFloat();
+            coeffs[j + blueIdx]       = (scale[i] * _coeffs[j + 2]).toFloat();
 
-            CV_Assert( coeffs[j] >= 0 && coeffs[j + 1] >= 0 && coeffs[j + 2] >= 0 &&
-                       i32_to_f32(coeffs[j] + coeffs[j + 1] + coeffs[j + 2]) < float_to_f32(1.5f)*LabCbrtTabScale );
+            softfloat32_t c0(coeffs[j]), c1(coeffs[j + 1]), c2(coeffs[j + 2]);
+            CV_Assert( c0 >= 0 && c1 >= 0 && c2 >= 0 &&
+                       c0 + c1 + c2 < softfloat32_t(LabCbrtTabScale)*1.5f );
         }
     }
 
     void operator()(const float* src, float* dst, int n) const
     {
         int i, scn = srccn, bIdx = blueIdx;
-        float gscale = f32_to_float(GammaTabScale);
+        float gscale = GammaTabScale;
         const float* gammaTab = srgb ? sRGBGammaTab : 0;
         float C0 = coeffs[0], C1 = coeffs[1], C2 = coeffs[2],
               C3 = coeffs[3], C4 = coeffs[4], C5 = coeffs[5],
@@ -789,8 +786,8 @@ struct Lab2RGBfloat
 {
     typedef float channel_type;
 
-    Lab2RGBfloat( int _dstcn, int _blueIdx, const float32_t* _coeffs,
-              const float32_t* _whitept, bool _srgb )
+    Lab2RGBfloat( int _dstcn, int _blueIdx, const float* _coeffs,
+              const float* _whitept, bool _srgb )
     : dstcn(_dstcn), srgb(_srgb), blueIdx(_blueIdx)
     {
         initLabTabs();
@@ -802,13 +799,14 @@ struct Lab2RGBfloat
 
         for( int i = 0; i < 3; i++ )
         {
-            coeffs[i+(blueIdx^2)*3] = f32_to_float(_coeffs[i]  *_whitept[i]);
-            coeffs[i+3]             = f32_to_float(_coeffs[i+3]*_whitept[i]);
-            coeffs[i+blueIdx*3]     = f32_to_float(_coeffs[i+6]*_whitept[i]);
+            coeffs[i+(blueIdx^2)*3] = (softfloat32_t(_coeffs[i]  )*_whitept[i]).toFloat();
+            coeffs[i+3]             = (softfloat32_t(_coeffs[i+3])*_whitept[i]).toFloat();
+            coeffs[i+blueIdx*3]     = (softfloat32_t(_coeffs[i+6])*_whitept[i]).toFloat();
         }
 
-        lThresh = 0.008856f * 903.3f;
-        fThresh = 7.787f * 0.008856f + 16.0f / 116.0f;
+        lThresh = (softfloat32_t(0.008856f) * 903.3f).toFloat();
+        fThresh = (softfloat32_t(7.787f) * 0.008856f +
+                   softfloat32_t(16.0f) / 116.0f).toFloat();
         #if CV_SSE2
         haveSIMD = checkHardwareSupport(CV_CPU_SSE2);
         #endif
@@ -907,7 +905,7 @@ struct Lab2RGBfloat
     {
         int i = 0, dcn = dstcn;
         const float* gammaTab = srgb ? sRGBInvGammaTab : 0;
-        float gscale = f32_to_float(GammaTabScale);
+        float gscale = GammaTabScale;
         float C0 = coeffs[0], C1 = coeffs[1], C2 = coeffs[2],
         C3 = coeffs[3], C4 = coeffs[4], C5 = coeffs[5],
         C6 = coeffs[6], C7 = coeffs[7], C8 = coeffs[8];
@@ -1040,8 +1038,8 @@ struct RGB2Lab_b
 {
     typedef uchar channel_type;
 
-    RGB2Lab_b(int _srccn, int _blueIdx, const float32_t* _coeffs,
-              const float32_t* _whitept, bool _srgb)
+    RGB2Lab_b(int _srccn, int _blueIdx, const float* _coeffs,
+              const float* _whitept, bool _srgb)
     : srccn(_srccn), srgb(_srgb), blueIdx(_blueIdx)
     {
         static volatile int _3 = 3;
@@ -1052,14 +1050,15 @@ struct RGB2Lab_b
         if (!_whitept)
             _whitept = D65;
 
+        static const softfloat32_t lshift(1 << lab_shift);
         for( int i = 0; i < _3; i++ )
         {
-            coeffs[i*3+(blueIdx^2)] = f32_to_i32(i32_to_f32(1 << lab_shift)*_coeffs[i*3  ]/_whitept[i], round_near_even, false);
-            coeffs[i*3+1]           = f32_to_i32(i32_to_f32(1 << lab_shift)*_coeffs[i*3+1]/_whitept[i], round_near_even, false);
-            coeffs[i*3+blueIdx]     = f32_to_i32(i32_to_f32(1 << lab_shift)*_coeffs[i*3+2]/_whitept[i], round_near_even, false);
+            coeffs[i*3+(blueIdx^2)] = ((lshift*_coeffs[i*3  ])/_whitept[i]).toI32();
+            coeffs[i*3+1]           = ((lshift*_coeffs[i*3+1])/_whitept[i]).toI32();
+            coeffs[i*3+blueIdx]     = ((lshift*_coeffs[i*3+2])/_whitept[i]).toI32();
 
-            CV_Assert(coeffs[i] >= 0 && coeffs[i*3+1] >= 0 && coeffs[i*3+2] >= 0 &&
-                      coeffs[i*3] + coeffs[i*3+1] + coeffs[i*3+2] < 2*(1 << lab_shift) );
+            CV_Assert(coeffs[i*3] >= 0 && coeffs[i*3+1] >= 0 && coeffs[i*3+2] >= 0 &&
+                      coeffs[i*3] + coeffs[i*3+1] + coeffs[i*3+2] < 2*(1 << lab_shift));
         }
     }
 
@@ -1114,8 +1113,8 @@ struct Lab2RGBinteger
     static const int base16_116 = 2260;
     static const int shift = lab_shift+(base_shift-inv_gamma_shift);
 
-    Lab2RGBinteger( int _dstcn, int blueIdx, const float32_t* _coeffs,
-                    const float32_t* _whitept, bool srgb )
+    Lab2RGBinteger( int _dstcn, int blueIdx, const float* _coeffs,
+                    const float* _whitept, bool srgb )
     : dstcn(_dstcn)
     {
         if(!_coeffs)
@@ -1123,11 +1122,12 @@ struct Lab2RGBinteger
         if(!_whitept)
             _whitept = D65;
 
+        static const softfloat32_t lshift(1 << lab_shift);
         for(int i = 0; i < 3; i++)
         {
-            coeffs[i+(blueIdx)*3]   = f32_to_i32(i32_to_f32(1 << lab_shift)*_coeffs[i  ]*_whitept[i], round_near_even, false);
-            coeffs[i+3]             = f32_to_i32(i32_to_f32(1 << lab_shift)*_coeffs[i+3]*_whitept[i], round_near_even, false);
-            coeffs[i+(blueIdx^2)*3] = f32_to_i32(i32_to_f32(1 << lab_shift)*_coeffs[i+6]*_whitept[i], round_near_even, false);
+            coeffs[i+(blueIdx)*3]   = ((lshift*_coeffs[i  ])*_whitept[i]).toI32();
+            coeffs[i+3]             = ((lshift*_coeffs[i+3])*_whitept[i]).toI32();
+            coeffs[i+(blueIdx^2)*3] = ((lshift*_coeffs[i+6])*_whitept[i]).toI32();
         }
 
          tab = srgb ? sRGBInvGammaTab_b : linearInvGammaTab_b;
@@ -1479,8 +1479,8 @@ struct Lab2RGB_b
 {
     typedef uchar channel_type;
 
-    Lab2RGB_b( int _dstcn, int _blueIdx, const float32_t* _coeffs,
-               const float32_t* _whitept, bool _srgb )
+    Lab2RGB_b( int _dstcn, int _blueIdx, const float* _coeffs,
+               const float* _whitept, bool _srgb )
     : fcvt(3, _blueIdx, _coeffs, _whitept, _srgb ), icvt(_dstcn, _blueIdx, _coeffs, _whitept, _srgb), dstcn(_dstcn)
     {
         useBitExactness = (!_coeffs && !_whitept && _srgb && enableBitExactness);
@@ -1716,8 +1716,8 @@ struct Lab2RGB_f
 {
     typedef float channel_type;
 
-    Lab2RGB_f( int _dstcn, int _blueIdx, const float32_t* _coeffs,
-              const float32_t* _whitept, bool _srgb )
+    Lab2RGB_f( int _dstcn, int _blueIdx, const float* _coeffs,
+              const float* _whitept, bool _srgb )
     : fcvt(_dstcn, _blueIdx, _coeffs, _whitept, _srgb), dstcn(_dstcn)
     { }
 
