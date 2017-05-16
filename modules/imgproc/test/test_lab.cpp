@@ -618,11 +618,13 @@ struct RGB2Lab_f
         for( int i = 0; i < _3; i++ )
         {
             int j = i * 3;
-            coeffs[j + (blueIdx ^ 2)] = (scale[i] * _coeffs[j]    ).toFloat();
-            coeffs[j + 1]             = (scale[i] * _coeffs[j + 1]).toFloat();
-            coeffs[j + blueIdx]       = (scale[i] * _coeffs[j + 2]).toFloat();
+            softfloat32_t c0 = scale[i] * _coeffs[j];
+            softfloat32_t c1 = scale[i] * _coeffs[j + 1];
+            softfloat32_t c2 = scale[i] * _coeffs[j + 2];
+            coeffs[j + (blueIdx ^ 2)] = c0.toFloat();
+            coeffs[j + 1]             = c1.toFloat();
+            coeffs[j + blueIdx]       = c2.toFloat();
 
-            softfloat32_t c0(coeffs[j]), c1(coeffs[j + 1]), c2(coeffs[j + 2]);
             CV_Assert( c0 >= 0 && c1 >= 0 && c2 >= 0 &&
                        c0 + c1 + c2 < softfloat32_t(LabCbrtTabScale)*1.5f );
         }
@@ -1130,7 +1132,7 @@ struct Lab2RGBinteger
             coeffs[i+(blueIdx^2)*3] = ((lshift*_coeffs[i+6])*_whitept[i]).toI32();
         }
 
-         tab = srgb ? sRGBInvGammaTab_b : linearInvGammaTab_b;
+        tab = srgb ? sRGBInvGammaTab_b : linearInvGammaTab_b;
     }
 
     // L, a, b should be in [-BASE; +BASE]
