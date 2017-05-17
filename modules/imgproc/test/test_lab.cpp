@@ -292,6 +292,32 @@ static inline v_int32x4 mulFracConst(v_int32x4 v)
 #define clip(value) \
     value < 0.0f ? 0.0f : value > 1.0f ? 1.0f : value;
 
+//TODO: remove
+/// to compare with SF-version
+
+static float LabCbrtTab_gold[LAB_CBRT_TAB_SIZE*4];
+
+static float sRGBGammaTab_gold[GAMMA_TAB_SIZE*4], sRGBInvGammaTab_gold[GAMMA_TAB_SIZE*4];
+
+static ushort sRGBGammaTab_b_gold[256], linearGammaTab_b_gold[256];
+
+static ushort sRGBInvGammaTab_b_gold[INV_GAMMA_TAB_SIZE], linearInvGammaTab_b_gold[INV_GAMMA_TAB_SIZE];
+static ushort LabCbrtTab_b_gold[LAB_CBRT_TAB_SIZE_B];
+
+static const bool assertTabAssertsEnabled = false;
+
+static inline float applyGamma_gold(float x)
+{
+    return x <= 0.04045f ? x*(1.f/12.92f) : (float)std::pow((double)(x + 0.055)*(1./1.055), 2.4);
+}
+
+static inline float applyInvGamma_gold(float x)
+{
+    return x <= 0.0031308 ? x*12.92f : (float)(1.055*std::pow((double)x, 1./2.4) - 0.055);
+}
+
+// TODO: up to this
+
 static inline softfloat32_t applyGamma(softfloat32_t x)
 {
     //return x <= 0.04045f ? x*(1.f/12.92f) : (float)std::pow((double)(x + 0.055)*(1./1.055), 2.4);
@@ -325,6 +351,24 @@ static void initLabTabs()
         }
         splineBuild(f, LAB_CBRT_TAB_SIZE, LabCbrtTab);
 
+        //TODO: remove
+        float f_gold[LAB_CBRT_TAB_SIZE+1], g_gold[GAMMA_TAB_SIZE+1], ig_gold[GAMMA_TAB_SIZE+1], scale_gold = 1.f/LabCbrtTabScale;
+        for(i = 0; i <= LAB_CBRT_TAB_SIZE; i++)
+        {
+            float x = i*scale_gold;
+            f_gold[i] = x < 0.008856f ? x*7.787f + 0.13793103448275862f : cvCbrt(x);
+
+            assert(!assertTabAssertsEnabled || x == (scale*i).toFloat());
+            assert(!assertTabAssertsEnabled || f_gold[i] == f[i] );
+        }
+        splineBuild(f, LAB_CBRT_TAB_SIZE, LabCbrtTab_gold);
+
+        for(i = 0; i <= LAB_CBRT_TAB_SIZE*4; i++)
+        {
+            assert(!assertTabAssertsEnabled || LabCbrtTab_gold[i] == LabCbrtTab[i] );
+        }
+        //TODO: up to this
+
         scale = softfloat32_t::one()/GammaTabScale;
         for(i = 0; i <= GAMMA_TAB_SIZE; i++)
         {
@@ -334,6 +378,30 @@ static void initLabTabs()
         }
         splineBuild(g, GAMMA_TAB_SIZE, sRGBGammaTab);
         splineBuild(ig, GAMMA_TAB_SIZE, sRGBInvGammaTab);
+
+        //TODO: remove
+        scale_gold = 1.f/GammaTabScale;
+        for(i = 0; i <= GAMMA_TAB_SIZE; i++)
+        {
+            float x = i*scale_gold;
+            g_gold[i] = applyGamma_gold(x);
+            ig_gold[i] = applyInvGamma_gold(x);
+
+            assert(!assertTabAssertsEnabled || g_gold[i]  == g[i] );
+            assert(!assertTabAssertsEnabled || ig_gold[i] == ig[i] );
+        }
+        splineBuild(g_gold, GAMMA_TAB_SIZE, sRGBGammaTab_gold);
+        splineBuild(ig_gold, GAMMA_TAB_SIZE, sRGBInvGammaTab_gold);
+
+        for(i = 0; i <= GAMMA_TAB_SIZE*4; i++)
+        {
+            assert(!assertTabAssertsEnabled || sRGBGammaTab_gold[i]    == sRGBGammaTab[i] );
+        }
+        for(i = 0; i <= GAMMA_TAB_SIZE*4; i++)
+        {
+            assert(!assertTabAssertsEnabled || sRGBInvGammaTab_gold[i] == sRGBInvGammaTab[i] );
+        }
+        //TODO: up to this
 
         static const softfloat32_t intScale(255*(1 << gamma_shift));
         for(i = 0; i < 256; i++)
@@ -350,6 +418,28 @@ static void initLabTabs()
             linearInvGammaTab_b[i] = (ushort)((f255*x).toI32());
         }
 
+        //TODO: remove
+        for(i = 0; i < 256; i++)
+        {
+            float x = i*(1.f/255.f);
+            sRGBGammaTab_b_gold[i] = saturate_cast<ushort>(255.f*(1 << gamma_shift)*applyGamma_gold(x));
+            linearGammaTab_b_gold[i] = (ushort)(i*(1 << gamma_shift));
+
+            assert(!assertTabAssertsEnabled || sRGBGammaTab_b_gold[i] == sRGBGammaTab_b[i] );
+            assert(!assertTabAssertsEnabled || linearGammaTab_b_gold[i] == linearGammaTab_b[i] );
+        }
+        float invScale_gold = 1.f/INV_GAMMA_TAB_SIZE;
+        for(i = 0; i < INV_GAMMA_TAB_SIZE; i++)
+        {
+            float x = i*invScale_gold;
+            sRGBInvGammaTab_b_gold[i] = saturate_cast<ushort>(255.f*applyInvGamma_gold(x));
+            linearInvGammaTab_b_gold[i] = (ushort)(255.f*x);
+
+            assert(!assertTabAssertsEnabled || sRGBInvGammaTab_b_gold[i] == sRGBInvGammaTab_b[i] );
+            assert(!assertTabAssertsEnabled || linearInvGammaTab_b_gold[i] == linearInvGammaTab_b[i] );
+        }
+        //TODO: up to this
+
         static const softfloat32_t cbTabScale(softfloat32_t::one()/(f255*(1 << gamma_shift)));
         static const softfloat32_t lshift2(1 << lab_shift2);
         for(i = 0; i < LAB_CBRT_TAB_SIZE_B; i++)
@@ -357,6 +447,16 @@ static void initLabTabs()
             softfloat32_t x = cbTabScale*i;
             LabCbrtTab_b[i] = (ushort)((lshift2 * (x < lthresh ? f32_mulAdd(x, lscale, lbias) : f32_cbrt(x))).toI32());
         }
+
+        //TODO: remove
+        for(i = 0; i < LAB_CBRT_TAB_SIZE_B; i++)
+        {
+            float x = i*(1.f/(255.f*(1 << gamma_shift)));
+            LabCbrtTab_b_gold[i] = saturate_cast<ushort>((1 << lab_shift2)*(x < 0.008856f ? x*7.787f + 0.13793103448275862f : cvCbrt(x)));
+
+            assert(!assertTabAssertsEnabled || LabCbrtTab_b_gold[i] == LabCbrtTab_b[i] );
+        }
+        //TODO: up to this
 
         if(enableRGB2LabInterpolation)
         {
@@ -379,6 +479,28 @@ static void initLabTabs()
             softfloat32_t D0 = coeffs[0], D1 = coeffs[1], D2 = coeffs[2],
                           D3 = coeffs[3], D4 = coeffs[4], D5 = coeffs[5],
                           D6 = coeffs[6], D7 = coeffs[7], D8 = coeffs[8];
+
+            //TODO: remove
+            static const float _a = 16.0f / 116.0f;
+            float coeffs_gold[9];
+
+            //RGB2Lab coeffs
+            float scaleWhite_gold[] = { 1.0f / _whitept[0], 1.0f, 1.0f / _whitept[2] };
+
+            for(i = 0; i < 3; i++ )
+            {
+                int j = i * 3;
+                coeffs_gold[j + 2] = sRGB2XYZ_D65[j]     * scaleWhite_gold[i];
+                coeffs_gold[j + 1] = sRGB2XYZ_D65[j + 1] * scaleWhite_gold[i];
+                coeffs_gold[j + 0] = sRGB2XYZ_D65[j + 2] * scaleWhite_gold[i];
+
+            }
+
+            for(i = 0; i < 9; i++)
+            {
+                assert(!assertTabAssertsEnabled || coeffs_gold[i] == coeffs[i].toFloat());
+            }
+            //TODO: up to this
 
             static const softfloat32_t lld(LAB_LUT_DIM - 1), f116(116), f16(16), f500(500), f200(200);
             static const softfloat32_t f100(100), f128(128), f256(256), lbase((int)LAB_BASE), f9033(903.3f);
@@ -414,6 +536,34 @@ static void initLabTabs()
                         RGB2Labprev[idx]   = (int16_t)((lbase*L/f100).toI32());
                         RGB2Labprev[idx+1] = (int16_t)((lbase*(a + f128)/f256).toI32());
                         RGB2Labprev[idx+2] = (int16_t)((lbase*(b + f128)/f256).toI32());
+
+                        //TODO: remove
+                        //RGB 2 Lab LUT building
+                        float R_gold = 1.0f*p/(LAB_LUT_DIM-1);
+                        float G_gold = 1.0f*q/(LAB_LUT_DIM-1);
+                        float B_gold = 1.0f*r/(LAB_LUT_DIM-1);
+
+                        R_gold = applyGamma_gold(R_gold);
+                        G_gold = applyGamma_gold(G_gold);
+                        B_gold = applyGamma_gold(B_gold);
+
+                        float X_gold = R_gold*coeffs_gold[0] + G_gold*coeffs_gold[1] + B_gold*coeffs_gold[2];
+                        float Y_gold = R_gold*coeffs_gold[3] + G_gold*coeffs_gold[4] + B_gold*coeffs_gold[5];
+                        float Z_gold = R_gold*coeffs_gold[6] + G_gold*coeffs_gold[7] + B_gold*coeffs_gold[8];
+
+                        float FX_gold = X_gold > 0.008856f ? std::pow(X_gold, _1_3f) : (7.787f * X_gold + _a);
+                        float FY_gold = Y_gold > 0.008856f ? std::pow(Y_gold, _1_3f) : (7.787f * Y_gold + _a);
+                        float FZ_gold = Z_gold > 0.008856f ? std::pow(Z_gold, _1_3f) : (7.787f * Z_gold + _a);
+
+                        float L_gold = Y_gold > 0.008856f ? (116.f * FY_gold - 16.f) : (903.3f * Y_gold);
+                        float a_gold = 500.f * (FX_gold - FY_gold);
+                        float b_gold = 200.f * (FY_gold - FZ_gold);
+
+                        assert(!assertTabAssertsEnabled || RGB2Labprev[idx]   == (int16_t)cvRound(LAB_BASE*L_gold/100.0f) );
+                        assert(!assertTabAssertsEnabled || RGB2Labprev[idx+1] == (int16_t)cvRound(LAB_BASE*(a_gold+128.0f)/256.0f) );
+                        assert(!assertTabAssertsEnabled || RGB2Labprev[idx+2] == (int16_t)cvRound(LAB_BASE*(b_gold+128.0f)/256.0f) );
+
+                        //TODO: up to this
                     }
                 }
             }
@@ -465,7 +615,6 @@ static void initLabTabs()
         initialized = true;
     }
 }
-
 
 // cx, cy, cz are in [0; LAB_BASE]
 static inline void trilinearInterpolate(int cx, int cy, int cz, int16_t* LUT,
@@ -606,27 +755,47 @@ struct RGB2Lab_f
 
         useInterpolation = (!_coeffs && !_whitept && srgb && enableRGB2LabInterpolation);
 
+        useBitExactness = enableBitExactness;
+
         if (!_coeffs)
             _coeffs = sRGB2XYZ_D65;
         if (!_whitept)
             _whitept = D65;
 
-        softfloat32_t scale[] = { softfloat32_t::one() / _whitept[0],
-                                  softfloat32_t::one(),
-                                  softfloat32_t::one() / _whitept[2] };
-
-        for( int i = 0; i < _3; i++ )
+        if(useBitExactness)
         {
-            int j = i * 3;
-            softfloat32_t c0 = scale[i] * _coeffs[j];
-            softfloat32_t c1 = scale[i] * _coeffs[j + 1];
-            softfloat32_t c2 = scale[i] * _coeffs[j + 2];
-            coeffs[j + (blueIdx ^ 2)] = c0.toFloat();
-            coeffs[j + 1]             = c1.toFloat();
-            coeffs[j + blueIdx]       = c2.toFloat();
+            softfloat32_t scale[] = { softfloat32_t::one() / _whitept[0],
+                                      softfloat32_t::one(),
+                                      softfloat32_t::one() / _whitept[2] };
 
-            CV_Assert( c0 >= 0 && c1 >= 0 && c2 >= 0 &&
-                       c0 + c1 + c2 < softfloat32_t(LabCbrtTabScale)*1.5f );
+            for( int i = 0; i < _3; i++ )
+            {
+                int j = i * 3;
+                softfloat32_t c0 = scale[i] * _coeffs[j];
+                softfloat32_t c1 = scale[i] * _coeffs[j + 1];
+                softfloat32_t c2 = scale[i] * _coeffs[j + 2];
+                coeffs[j + (blueIdx ^ 2)] = c0.toFloat();
+                coeffs[j + 1]             = c1.toFloat();
+                coeffs[j + blueIdx]       = c2.toFloat();
+
+                CV_Assert( c0 >= 0 && c1 >= 0 && c2 >= 0 &&
+                           c0 + c1 + c2 < softfloat32_t(LabCbrtTabScale)*1.5f );
+            }
+        }
+        else
+        {
+            float scale[] = { 1.0f / _whitept[0], 1.0f, 1.0f / _whitept[2] };
+
+            for( int i = 0; i < _3; i++ )
+            {
+                int j = i * 3;
+                coeffs[j + (blueIdx ^ 2)] = _coeffs[j] * scale[i];
+                coeffs[j + 1] = _coeffs[j + 1] * scale[i];
+                coeffs[j + blueIdx] = _coeffs[j + 2] * scale[i];
+
+                CV_Assert( coeffs[j] >= 0 && coeffs[j + 1] >= 0 && coeffs[j + 2] >= 0 &&
+                           coeffs[j] + coeffs[j + 1] + coeffs[j + 2] < 1.5f*LabCbrtTabScale );
+            }
         }
     }
 
@@ -634,7 +803,7 @@ struct RGB2Lab_f
     {
         int i, scn = srccn, bIdx = blueIdx;
         float gscale = GammaTabScale;
-        const float* gammaTab = srgb ? sRGBGammaTab : 0;
+        const float* gammaTab = srgb ? ( useBitExactness ? sRGBGammaTab : sRGBGammaTab_gold ) : 0;
         float C0 = coeffs[0], C1 = coeffs[1], C2 = coeffs[2],
               C3 = coeffs[3], C4 = coeffs[4], C5 = coeffs[5],
               C6 = coeffs[6], C7 = coeffs[7], C8 = coeffs[8];
@@ -780,6 +949,8 @@ struct RGB2Lab_f
     bool srgb;
     bool useInterpolation;
     int blueIdx;
+    //just for accuracy measurement purposes
+    bool useBitExactness;
 };
 
 
@@ -799,16 +970,33 @@ struct Lab2RGBfloat
         if(!_whitept)
             _whitept = D65;
 
-        for( int i = 0; i < 3; i++ )
+        //just for accuracy measurement purposes
+        useBitExactness = enableBitExactness;
+        if(enableBitExactness)
         {
-            coeffs[i+(blueIdx^2)*3] = (softfloat32_t(_coeffs[i]  )*_whitept[i]).toFloat();
-            coeffs[i+3]             = (softfloat32_t(_coeffs[i+3])*_whitept[i]).toFloat();
-            coeffs[i+blueIdx*3]     = (softfloat32_t(_coeffs[i+6])*_whitept[i]).toFloat();
-        }
+            for( int i = 0; i < 3; i++ )
+            {
+                coeffs[i+(blueIdx^2)*3] = (softfloat32_t(_coeffs[i]  )*_whitept[i]).toFloat();
+                coeffs[i+3]             = (softfloat32_t(_coeffs[i+3])*_whitept[i]).toFloat();
+                coeffs[i+blueIdx*3]     = (softfloat32_t(_coeffs[i+6])*_whitept[i]).toFloat();
+            }
 
-        lThresh = (softfloat32_t(0.008856f) * 903.3f).toFloat();
-        fThresh = (softfloat32_t(7.787f) * 0.008856f +
-                   softfloat32_t(16.0f) / 116.0f).toFloat();
+            lThresh = (softfloat32_t(0.008856f) * 903.3f).toFloat();
+            fThresh = (softfloat32_t(7.787f) * 0.008856f +
+                       softfloat32_t(16.0f) / 116.0f).toFloat();
+        }
+        else
+        {
+            for( int i = 0; i < 3; i++ )
+            {
+                coeffs[i+(blueIdx^2)*3] = _coeffs[i]*_whitept[i];
+                coeffs[i+3] = _coeffs[i+3]*_whitept[i];
+                coeffs[i+blueIdx*3] = _coeffs[i+6]*_whitept[i];
+            }
+
+            lThresh = 0.008856f * 903.3f;
+            fThresh = 7.787f * 0.008856f + 16.0f / 116.0f;
+        }
         #if CV_SSE2
         haveSIMD = checkHardwareSupport(CV_CPU_SSE2);
         #endif
@@ -906,7 +1094,7 @@ struct Lab2RGBfloat
     void operator()(const float* src, float* dst, int n) const
     {
         int i = 0, dcn = dstcn;
-        const float* gammaTab = srgb ? sRGBInvGammaTab : 0;
+        const float* gammaTab = srgb ? ( useBitExactness ? sRGBInvGammaTab : sRGBInvGammaTab_gold ) : 0;
         float gscale = GammaTabScale;
         float C0 = coeffs[0], C1 = coeffs[1], C2 = coeffs[2],
         C3 = coeffs[3], C4 = coeffs[4], C5 = coeffs[5],
@@ -1033,6 +1221,8 @@ struct Lab2RGBfloat
     bool haveSIMD;
     #endif
     int blueIdx;
+    //just for accuracy measurement purposes
+    bool useBitExactness;
 };
 
 
@@ -1052,15 +1242,32 @@ struct RGB2Lab_b
         if (!_whitept)
             _whitept = D65;
 
-        static const softfloat32_t lshift(1 << lab_shift);
-        for( int i = 0; i < _3; i++ )
+        //just for accuracy measurement purposes
+        useBitExactness = enableBitExactness;
+        if(enableBitExactness)
         {
-            coeffs[i*3+(blueIdx^2)] = ((lshift*_coeffs[i*3  ])/_whitept[i]).toI32();
-            coeffs[i*3+1]           = ((lshift*_coeffs[i*3+1])/_whitept[i]).toI32();
-            coeffs[i*3+blueIdx]     = ((lshift*_coeffs[i*3+2])/_whitept[i]).toI32();
+            static const softfloat32_t lshift(1 << lab_shift);
+            for( int i = 0; i < _3; i++ )
+            {
+                coeffs[i*3+(blueIdx^2)] = ((lshift*_coeffs[i*3  ])/_whitept[i]).toI32();
+                coeffs[i*3+1]           = ((lshift*_coeffs[i*3+1])/_whitept[i]).toI32();
+                coeffs[i*3+blueIdx]     = ((lshift*_coeffs[i*3+2])/_whitept[i]).toI32();
 
-            CV_Assert(coeffs[i*3] >= 0 && coeffs[i*3+1] >= 0 && coeffs[i*3+2] >= 0 &&
-                      coeffs[i*3] + coeffs[i*3+1] + coeffs[i*3+2] < 2*(1 << lab_shift));
+                CV_Assert(coeffs[i*3] >= 0 && coeffs[i*3+1] >= 0 && coeffs[i*3+2] >= 0 &&
+                          coeffs[i*3] + coeffs[i*3+1] + coeffs[i*3+2] < 2*(1 << lab_shift));
+            }
+        }
+        else
+        {
+            for( int i = 0; i < _3; i++ )
+            {
+                coeffs[i*3+(blueIdx^2)] = cvRound((float)(1 << lab_shift)*_coeffs[i*3  ]/_whitept[i]);
+                coeffs[i*3+1]           = cvRound((float)(1 << lab_shift)*_coeffs[i*3+1]/_whitept[i]);
+                coeffs[i*3+blueIdx]     = cvRound((float)(1 << lab_shift)*_coeffs[i*3+2]/_whitept[i]);
+
+                CV_Assert(coeffs[i] >= 0 && coeffs[i*3+1] >= 0 && coeffs[i*3+2] >= 0 &&
+                          coeffs[i*3] + coeffs[i*3+1] + coeffs[i*3+2] < 2*(1 << lab_shift) );
+            }
         }
     }
 
@@ -1068,7 +1275,8 @@ struct RGB2Lab_b
     {
         const int Lscale = (116*255+50)/100;
         const int Lshift = -((16*255*(1 << lab_shift2) + 50)/100);
-        const ushort* tab = srgb ? sRGBGammaTab_b : linearGammaTab_b;
+        const ushort* tab = srgb ? ( useBitExactness ? sRGBGammaTab_b : sRGBGammaTab_b_gold ) :
+                                   ( useBitExactness ? linearGammaTab_b : linearGammaTab_b_gold );
         int i, scn = srccn;
         int C0 = coeffs[0], C1 = coeffs[1], C2 = coeffs[2],
             C3 = coeffs[3], C4 = coeffs[4], C5 = coeffs[5],
@@ -1097,6 +1305,8 @@ struct RGB2Lab_b
     int coeffs[9];
     bool srgb;
     int blueIdx;
+    // just for accuracy measurement purposes
+    bool useBitExactness;
 };
 
 
@@ -1124,15 +1334,28 @@ struct Lab2RGBinteger
         if(!_whitept)
             _whitept = D65;
 
-        static const softfloat32_t lshift(1 << lab_shift);
-        for(int i = 0; i < 3; i++)
+        if(enableBitExactness)
         {
-            coeffs[i+(blueIdx)*3]   = ((lshift*_coeffs[i  ])*_whitept[i]).toI32();
-            coeffs[i+3]             = ((lshift*_coeffs[i+3])*_whitept[i]).toI32();
-            coeffs[i+(blueIdx^2)*3] = ((lshift*_coeffs[i+6])*_whitept[i]).toI32();
+            static const softfloat32_t lshift(1 << lab_shift);
+            for(int i = 0; i < 3; i++)
+            {
+                coeffs[i+(blueIdx)*3]   = ((lshift*_coeffs[i  ])*_whitept[i]).toI32();
+                coeffs[i+3]             = ((lshift*_coeffs[i+3])*_whitept[i]).toI32();
+                coeffs[i+(blueIdx^2)*3] = ((lshift*_coeffs[i+6])*_whitept[i]).toI32();
+            }
+        }
+        else
+        {
+            for(int i = 0; i < 3; i++)
+            {
+                coeffs[i+(blueIdx)*3]   = cvRound((float)(1 << lab_shift)*_coeffs[i  ]*_whitept[i]);
+                coeffs[i+3]             = cvRound((float)(1 << lab_shift)*_coeffs[i+3]*_whitept[i]);
+                coeffs[i+(blueIdx^2)*3] = cvRound((float)(1 << lab_shift)*_coeffs[i+6]*_whitept[i]);
+            }
         }
 
-        tab = srgb ? sRGBInvGammaTab_b : linearInvGammaTab_b;
+        tab = srgb ? (enableBitExactness ? sRGBInvGammaTab_b   : sRGBInvGammaTab_b_gold) :
+                     (enableBitExactness ? linearInvGammaTab_b : linearInvGammaTab_b_gold);
     }
 
     // L, a, b should be in [-BASE; +BASE]
@@ -1748,15 +1971,16 @@ TEST(ImgProc_Color, LabCheckWorking)
     #define TO_BGR 1
     const bool randomFill = true;
 
-    enableBitExactness = true; enableRGB2LabInterpolation = true;
-
     int dstChannels = 3;
     int blueIdx = 0;
     bool srgb = true;
+
+    enableBitExactness = true; enableRGB2LabInterpolation = true;
     Lab2RGB_f interToBgr  (dstChannels, blueIdx, 0, 0, srgb);
     RGB2Lab_f interToLab  (dstChannels, blueIdx, 0, 0, srgb);
     Lab2RGB_b interToBgr_b(dstChannels, blueIdx, 0, 0, srgb);
     RGB2Lab_b interToLab_b(dstChannels, blueIdx, 0, 0, srgb);
+
     enableBitExactness = false; enableRGB2LabInterpolation = false;
     Lab2RGB_f goldToBgr  (dstChannels, blueIdx, 0, 0, srgb);
     RGB2Lab_f goldToLab  (dstChannels, blueIdx, 0, 0, srgb);

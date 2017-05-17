@@ -5806,8 +5806,8 @@ static ushort sRGBInvGammaTab_b[INV_GAMMA_TAB_SIZE], linearInvGammaTab_b[INV_GAM
 #define LAB_CBRT_TAB_SIZE_B (256*3/2*(1<<gamma_shift))
 static ushort LabCbrtTab_b[LAB_CBRT_TAB_SIZE_B];
 
-static bool enableBitExactness = true;
-static bool enablePackedLab = true;
+static const bool enableBitExactness = true;
+static const bool enablePackedLab = true;
 
 template <uint v>
 struct SignificantBits
