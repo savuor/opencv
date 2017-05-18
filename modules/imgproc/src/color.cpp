@@ -168,6 +168,31 @@ template<typename _Tp> static void splineBuild(const _Tp* f, int n, _Tp* tab)
     }
 }
 
+static void splineBuild(const softfloat32_t* f, int n, float* tab)
+{
+    softfloat32_t cn = 0;
+    softfloat32_t* sftab = reinterpret_cast<softfloat32_t*>(tab);
+    int i;
+    tab[0] = tab[1] = 0.0f;
+
+    for(i = 1; i < n-1; i++)
+    {
+        softfloat32_t t = (f[i+1] - f[i]*2 + f[i-1])*3;
+        softfloat32_t l = softfloat32_t::one()/(softfloat32_t(4) - sftab[(i-1)*4]);
+        sftab[i*4] = l; sftab[i*4+1] = (t - sftab[(i-1)*4+1])*l;
+    }
+
+    for(i = n-1; i >= 0; i--)
+    {
+        softfloat32_t c = sftab[i*4+1] - sftab[i*4]*cn;
+        softfloat32_t b = f[i+1] - f[i] - (cn + c*2)/3;
+        softfloat32_t d = (cn - c)/3;
+        sftab[i*4] = f[i]; sftab[i*4+1] = b;
+        sftab[i*4+2] = c; sftab[i*4+3] = d;
+        cn = c;
+    }
+}
+
 // interpolates value of a function at x, 0 <= x <= n using a cubic spline.
 template<typename _Tp> static inline _Tp splineInterpolate(_Tp x, const _Tp* tab, int n)
 {
@@ -5898,13 +5923,13 @@ static void initLabTabs()
         static const softfloat32_t lbias = softfloat32_t(16.f) / 116.f;
         static const softfloat32_t f255(255);
 
-        float f[LAB_CBRT_TAB_SIZE+1], g[GAMMA_TAB_SIZE+1], ig[GAMMA_TAB_SIZE+1];
+        softfloat32_t f[LAB_CBRT_TAB_SIZE+1], g[GAMMA_TAB_SIZE+1], ig[GAMMA_TAB_SIZE+1];
         softfloat32_t scale = softfloat32_t::one()/LabCbrtTabScale;
         int i;
         for(i = 0; i <= LAB_CBRT_TAB_SIZE; i++)
         {
             softfloat32_t x = scale*i;
-            f[i] = (x < lthresh ? f32_mulAdd(x, lscale, lbias) : f32_cbrt(x)).toFloat();
+            f[i] = x < lthresh ? f32_mulAdd(x, lscale, lbias) : f32_cbrt(x);
         }
         splineBuild(f, LAB_CBRT_TAB_SIZE, LabCbrtTab);
 
@@ -5912,8 +5937,8 @@ static void initLabTabs()
         for(i = 0; i <= GAMMA_TAB_SIZE; i++)
         {
             softfloat32_t x = scale*i;
-            g[i] = applyGamma(x).toFloat();
-            ig[i] = applyInvGamma(x).toFloat();
+            g[i] = applyGamma(x);
+            ig[i] = applyInvGamma(x);
         }
         splineBuild(g, GAMMA_TAB_SIZE, sRGBGammaTab);
         splineBuild(ig, GAMMA_TAB_SIZE, sRGBInvGammaTab);
