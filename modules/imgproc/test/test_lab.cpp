@@ -1277,6 +1277,7 @@ struct RGB2Lab_b
         const int Lshift = -((16*255*(1 << lab_shift2) + 50)/100);
         const ushort* tab = srgb ? ( useBitExactness ? sRGBGammaTab_b : sRGBGammaTab_b_gold ) :
                                    ( useBitExactness ? linearGammaTab_b : linearGammaTab_b_gold );
+        const ushort* cbrtTab = useBitExactness ? LabCbrtTab_b : LabCbrtTab_b_gold;
         int i, scn = srccn;
         int C0 = coeffs[0], C1 = coeffs[1], C2 = coeffs[2],
             C3 = coeffs[3], C4 = coeffs[4], C5 = coeffs[5],
@@ -1287,9 +1288,9 @@ struct RGB2Lab_b
         for(; i < n; i += 3, src += scn )
         {
             int R = tab[src[0]], G = tab[src[1]], B = tab[src[2]];
-            int fX = LabCbrtTab_b[CV_DESCALE(R*C0 + G*C1 + B*C2, lab_shift)];
-            int fY = LabCbrtTab_b[CV_DESCALE(R*C3 + G*C4 + B*C5, lab_shift)];
-            int fZ = LabCbrtTab_b[CV_DESCALE(R*C6 + G*C7 + B*C8, lab_shift)];
+            int fX = cbrtTab[CV_DESCALE(R*C0 + G*C1 + B*C2, lab_shift)];
+            int fY = cbrtTab[CV_DESCALE(R*C3 + G*C4 + B*C5, lab_shift)];
+            int fZ = cbrtTab[CV_DESCALE(R*C6 + G*C7 + B*C8, lab_shift)];
 
             int L = CV_DESCALE( Lscale*fY + Lshift, lab_shift2 );
             int a = CV_DESCALE( 500*(fX - fY) + 128*(1 << lab_shift2), lab_shift2 );
