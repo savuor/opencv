@@ -5791,7 +5791,7 @@ static const float D65[] = { 0.950456f, 1.f, 1.088754f };
 
 enum { LAB_CBRT_TAB_SIZE = 1024, GAMMA_TAB_SIZE = 1024 };
 static float LabCbrtTab[LAB_CBRT_TAB_SIZE*4];
-static const float LabCbrtTabScale = LAB_CBRT_TAB_SIZE/1.5f;
+static const float LabCbrtTabScale(LAB_CBRT_TAB_SIZE*2/3);
 
 static float sRGBGammaTab[GAMMA_TAB_SIZE*4], sRGBInvGammaTab[GAMMA_TAB_SIZE*4];
 static const float GammaTabScale = (float)GAMMA_TAB_SIZE;
