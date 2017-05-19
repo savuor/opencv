@@ -329,7 +329,13 @@ static ushort sRGBGammaTab_b_gold[256], linearGammaTab_b_gold[256];
 static ushort sRGBInvGammaTab_b_gold[INV_GAMMA_TAB_SIZE], linearInvGammaTab_b_gold[INV_GAMMA_TAB_SIZE];
 static ushort LabCbrtTab_b_gold[LAB_CBRT_TAB_SIZE_B];
 
-static const bool assertTabAssertsEnabled = false;
+template<typename T> inline void compareAndPrint(T a, T b, int i, string s)
+{
+    if(a != b)
+    {
+        cout << s << " at i = " << i << " a = " << a << " b = " << b << " (a-b) = " << (a - b) << endl;
+    }
+}
 
 static inline float applyGamma_gold(float x)
 {
@@ -383,14 +389,14 @@ static void initLabTabs()
             float x = i*scale_gold;
             f_gold[i] = x < 0.008856f ? x*7.787f + 0.13793103448275862f : cvCbrt(x);
 
-            assert(!assertTabAssertsEnabled || x == (scale*i).toFloat());
-            assert(!assertTabAssertsEnabled || f_gold[i] == f[i].toFloat() );
+            compareAndPrint(x, (scale*i).toFloat(), i, "LabCbrtTab x");
+            compareAndPrint(f_gold[i], f[i].toFloat(), i, "LabCbrtTab f");
         }
         splineBuild(f, LAB_CBRT_TAB_SIZE, LabCbrtTab_gold);
 
         for(i = 0; i <= LAB_CBRT_TAB_SIZE*4; i++)
         {
-            assert(!assertTabAssertsEnabled || LabCbrtTab_gold[i] == LabCbrtTab[i] );
+            compareAndPrint(LabCbrtTab_gold[i], LabCbrtTab[i], i, "LabCbrtTab tab");
         }
         //TODO: up to this
 
@@ -412,19 +418,16 @@ static void initLabTabs()
             g_gold[i] = applyGamma_gold(x);
             ig_gold[i] = applyInvGamma_gold(x);
 
-            assert(!assertTabAssertsEnabled || g_gold[i]  == g[i].toFloat() );
-            assert(!assertTabAssertsEnabled || ig_gold[i] == ig[i].toFloat() );
+            compareAndPrint(g_gold[i], g[i].toFloat(), i, "sRGBGammaTab g");
+            compareAndPrint(ig_gold[i], ig[i].toFloat(), i, "sRGBInvGammaTab ig");
         }
         splineBuild(g_gold, GAMMA_TAB_SIZE, sRGBGammaTab_gold);
         splineBuild(ig_gold, GAMMA_TAB_SIZE, sRGBInvGammaTab_gold);
 
         for(i = 0; i <= GAMMA_TAB_SIZE*4; i++)
         {
-            assert(!assertTabAssertsEnabled || sRGBGammaTab_gold[i]    == sRGBGammaTab[i] );
-        }
-        for(i = 0; i <= GAMMA_TAB_SIZE*4; i++)
-        {
-            assert(!assertTabAssertsEnabled || sRGBInvGammaTab_gold[i] == sRGBInvGammaTab[i] );
+            compareAndPrint( sRGBGammaTab_gold[i], sRGBGammaTab[i], i, "sRGBGammaTab tab" );
+            compareAndPrint( sRGBInvGammaTab_gold[i], sRGBInvGammaTab[i], i, "sRGBInvGammaTab tab" );
         }
         //TODO: up to this
 
@@ -450,8 +453,8 @@ static void initLabTabs()
             sRGBGammaTab_b_gold[i] = saturate_cast<ushort>(255.f*(1 << gamma_shift)*applyGamma_gold(x));
             linearGammaTab_b_gold[i] = (ushort)(i*(1 << gamma_shift));
 
-            assert(!assertTabAssertsEnabled || sRGBGammaTab_b_gold[i] == sRGBGammaTab_b[i] );
-            assert(!assertTabAssertsEnabled || linearGammaTab_b_gold[i] == linearGammaTab_b[i] );
+            compareAndPrint( sRGBGammaTab_b_gold[i], sRGBGammaTab_b[i], i, "sRGBGammaTab_b tab");
+            compareAndPrint( linearGammaTab_b_gold[i], linearGammaTab_b[i], i, "linearGammaTab_b tab");
         }
         float invScale_gold = 1.f/INV_GAMMA_TAB_SIZE;
         for(i = 0; i < INV_GAMMA_TAB_SIZE; i++)
@@ -460,8 +463,8 @@ static void initLabTabs()
             sRGBInvGammaTab_b_gold[i] = saturate_cast<ushort>(255.f*applyInvGamma_gold(x));
             linearInvGammaTab_b_gold[i] = (ushort)(255.f*x);
 
-            assert(!assertTabAssertsEnabled || sRGBInvGammaTab_b_gold[i] == sRGBInvGammaTab_b[i] );
-            assert(!assertTabAssertsEnabled || linearInvGammaTab_b_gold[i] == linearInvGammaTab_b[i] );
+            compareAndPrint( sRGBInvGammaTab_b_gold[i], sRGBInvGammaTab_b[i], i, "sRGBInvGammaTab_b tab" );
+            compareAndPrint( linearInvGammaTab_b_gold[i], linearInvGammaTab_b[i], i, "linearInvGammaTab_b tab" );
         }
         //TODO: up to this
 
@@ -479,7 +482,7 @@ static void initLabTabs()
             float x = i*(1.f/(255.f*(1 << gamma_shift)));
             LabCbrtTab_b_gold[i] = saturate_cast<ushort>((1 << lab_shift2)*(x < 0.008856f ? x*7.787f + 0.13793103448275862f : cvCbrt(x)));
 
-            assert(!assertTabAssertsEnabled || LabCbrtTab_b_gold[i] == LabCbrtTab_b[i] );
+            compareAndPrint(LabCbrtTab_b_gold[i], LabCbrtTab_b[i], i, "LabCbrtTab_b tab" );
         }
         //TODO: up to this
 
@@ -523,7 +526,7 @@ static void initLabTabs()
 
             for(i = 0; i < 9; i++)
             {
-                assert(!assertTabAssertsEnabled || coeffs_gold[i] == coeffs[i].toFloat());
+                compareAndPrint( coeffs_gold[i], coeffs[i].toFloat(), i, "interp coeffs");
             }
             //TODO: up to this
 
@@ -584,9 +587,9 @@ static void initLabTabs()
                         float a_gold = 500.f * (FX_gold - FY_gold);
                         float b_gold = 200.f * (FY_gold - FZ_gold);
 
-                        assert(!assertTabAssertsEnabled || RGB2Labprev[idx]   == (int16_t)cvRound(LAB_BASE*L_gold/100.0f) );
-                        assert(!assertTabAssertsEnabled || RGB2Labprev[idx+1] == (int16_t)cvRound(LAB_BASE*(a_gold+128.0f)/256.0f) );
-                        assert(!assertTabAssertsEnabled || RGB2Labprev[idx+2] == (int16_t)cvRound(LAB_BASE*(b_gold+128.0f)/256.0f) );
+                        compareAndPrint( RGB2Labprev[idx  ], (int16_t)cvRound(LAB_BASE*L_gold/100.0f), idx, "RGB2Labprev L" );
+                        compareAndPrint( RGB2Labprev[idx+1], (int16_t)cvRound(LAB_BASE*(a_gold+128.0f)/256.0f), idx, "RGB2Labprev a" );
+                        compareAndPrint( RGB2Labprev[idx+2], (int16_t)cvRound(LAB_BASE*(b_gold+128.0f)/256.0f), idx, "RGB2Labprev b" );
 
                         //TODO: up to this
                     }
@@ -1988,7 +1991,7 @@ struct Lab2RGB_f
 TEST(ImgProc_Color, LabCheckWorking)
 {
     //TODO: make good test
-    //return;
+    return;
 
     //cv::setUseOptimized(false);
 
