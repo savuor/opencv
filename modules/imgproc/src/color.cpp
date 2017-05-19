@@ -5955,7 +5955,7 @@ static void initLabTabs()
         {
             softfloat32_t x = invScale*i;
             sRGBInvGammaTab_b[i] = (ushort)((f255*applyInvGamma(x)).toI32());
-            linearInvGammaTab_b[i] = (ushort)((f255*x).toI32());
+            linearInvGammaTab_b[i] = (ushort)((f255*x).toI32_minMag());
         }
 
         static const softfloat32_t cbTabScale(softfloat32_t::one()/(f255*(1 << gamma_shift)));
