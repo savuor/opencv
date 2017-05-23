@@ -7334,8 +7334,8 @@ struct Luv2RGB_f
                           softfloat32_t(whitept[1])*15 +
                           softfloat32_t(whitept[2])*3;
         d = softfloat::one()/max(d, softfloat(FLT_EPSILON));
-        un = (d*4*whitept[0]).toFloat();
-        vn = (d*9*whitept[1]).toFloat();
+        un = (d*13*4*whitept[0]).toFloat();
+        vn = (d*13*9*whitept[1]).toFloat();
         #if CV_SSE2
         haveSIMD = checkHardwareSupport(CV_CPU_SSE2);
         #endif
@@ -9077,21 +9077,15 @@ static bool ocl_cvtColor( InputArray _src, OutputArray _dst, int code, int dcn )
             {
                 int coeffs[9];
                 const float * const _coeffs = sRGB2XYZ_D65, * const _whitept = D65;
-                const float scale[] =
+                static const softfloat32_t lshift(1 << lab_shift);
+                for( int i = 0; i < 3; i++ )
                 {
-                    (1 << lab_shift)/_whitept[0],
-                    (float)(1 << lab_shift),
-                    (1 << lab_shift)/_whitept[2]
-                };
+                    coeffs[i*3+(bidx^2)] = ((lshift*_coeffs[i*3  ])/_whitept[i]).toI32();
+                    coeffs[i*3+1]        = ((lshift*_coeffs[i*3+1])/_whitept[i]).toI32();
+                    coeffs[i*3+bidx]     = ((lshift*_coeffs[i*3+2])/_whitept[i]).toI32();
 
-                for (int i = 0; i < 3; i++ )
-                {
-                    coeffs[i*3+(bidx^2)] = cvRound(_coeffs[i*3]*scale[i]);
-                    coeffs[i*3+1] = cvRound(_coeffs[i*3+1]*scale[i]);
-                    coeffs[i*3+bidx] = cvRound(_coeffs[i*3+2]*scale[i]);
-
-                    CV_Assert( coeffs[i] >= 0 && coeffs[i*3+1] >= 0 && coeffs[i*3+2] >= 0 &&
-                              coeffs[i*3] + coeffs[i*3+1] + coeffs[i*3+2] < 2*(1 << lab_shift) );
+                    CV_Assert(coeffs[i*3] >= 0 && coeffs[i*3+1] >= 0 && coeffs[i*3+2] >= 0 &&
+                              coeffs[i*3] + coeffs[i*3+1] + coeffs[i*3+2] < 2*(1 << lab_shift));
                 }
                 Mat(1, 9, CV_32SC1, coeffs).copyTo(ucoeffs);
             }
@@ -9116,22 +9110,33 @@ static bool ocl_cvtColor( InputArray _src, OutputArray _dst, int code, int dcn )
             {
                 float coeffs[9];
                 const float * const _coeffs = sRGB2XYZ_D65, * const _whitept = D65;
-                float scale[] = { 1.0f / _whitept[0], 1.0f, 1.0f / _whitept[2] };
+
+                softfloat32_t scale[] = { softfloat32_t::one() / _whitept[0],
+                                          softfloat32_t::one(),
+                                          softfloat32_t::one() / _whitept[2] };
 
                 for (int i = 0; i < 3; i++)
                 {
                     int j = i * 3;
-                    coeffs[j + (bidx ^ 2)] = _coeffs[j] * (lab ? scale[i] : 1);
-                    coeffs[j + 1] = _coeffs[j + 1] * (lab ? scale[i] : 1);
-                    coeffs[j + bidx] = _coeffs[j + 2] * (lab ? scale[i] : 1);
 
-                    CV_Assert( coeffs[j] >= 0 && coeffs[j + 1] >= 0 && coeffs[j + 2] >= 0 &&
-                               coeffs[j] + coeffs[j + 1] + coeffs[j + 2] < 1.5f*(lab ? LabCbrtTabScale : 1) );
+                    softfloat32_t c0 = (lab ? scale[i] : softfloat32_t::one()) * _coeffs[j];
+                    softfloat32_t c1 = (lab ? scale[i] : softfloat32_t::one()) * _coeffs[j + 1];
+                    softfloat32_t c2 = (lab ? scale[i] : softfloat32_t::one()) * _coeffs[j + 2];
+
+                    coeffs[j + (bidx ^ 2)] = c0.toFloat();
+                    coeffs[j + 1]          = c1.toFloat();
+                    coeffs[j + bidx]       = c2.toFloat();
+
+                    CV_Assert( c0 >= 0 && c1 >= 0 && c2 >= 0 &&
+                               c0 + c1 + c2 < softfloat32_t(1.5f)*(lab ? LabCbrtTabScale : 1));
                 }
 
-                float d = 1.f/std::max(_whitept[0] + _whitept[1]*15 + _whitept[2]*3, FLT_EPSILON);
-                un = 13*4*_whitept[0]*d;
-                vn = 13*9*_whitept[1]*d;
+                softfloat32_t d = softfloat32_t(_whitept[0]) +
+                                  softfloat32_t(_whitept[1])*15 +
+                                  softfloat32_t(_whitept[2])*3;
+                d = softfloat::one()/max(d, softfloat(FLT_EPSILON));
+                un = (d*13*4*_whitept[0]).toFloat();
+                vn = (d*13*9*_whitept[1]).toFloat();
 
                 Mat(1, 9, CV_32FC1, coeffs).copyTo(ucoeffs);
             }
@@ -9191,14 +9196,17 @@ static bool ocl_cvtColor( InputArray _src, OutputArray _dst, int code, int dcn )
 
             for( int i = 0; i < 3; i++ )
             {
-                coeffs[i+(bidx^2)*3] = _coeffs[i] * (lab ? _whitept[i] : 1);
-                coeffs[i+3] = _coeffs[i+3] * (lab ? _whitept[i] : 1);
-                coeffs[i+bidx*3] = _coeffs[i+6] * (lab ? _whitept[i] : 1);
+                coeffs[i+(bidx^2)*3] = (softfloat32_t(_coeffs[i]  )*(lab ? _whitept[i] : 1)).toFloat();
+                coeffs[i+3]          = (softfloat32_t(_coeffs[i+3])*(lab ? _whitept[i] : 1)).toFloat();
+                coeffs[i+bidx*3]     = (softfloat32_t(_coeffs[i+6])*(lab ? _whitept[i] : 1)).toFloat();
             }
 
-            float d = 1.f/std::max(_whitept[0] + _whitept[1]*15 + _whitept[2]*3, FLT_EPSILON);
-            un = 4*13*_whitept[0]*d;
-            vn = 9*13*_whitept[1]*d;
+            softfloat32_t d = softfloat32_t(_whitept[0]) +
+                              softfloat32_t(_whitept[1])*15 +
+                              softfloat32_t(_whitept[2])*3;
+            d = softfloat::one()/max(d, softfloat(FLT_EPSILON));
+            un = (d*13*4*_whitept[0]).toFloat();
+            vn = (d*13*9*_whitept[1]).toFloat();
 
             Mat(1, 9, CV_32FC1, coeffs).copyTo(ucoeffs);
         }
@@ -9206,8 +9214,9 @@ static bool ocl_cvtColor( InputArray _src, OutputArray _dst, int code, int dcn )
         _dst.create(sz, CV_MAKETYPE(depth, dcn));
         dst = _dst.getUMat();
 
-        float lThresh = 0.008856f * 903.3f;
-        float fThresh = 7.787f * 0.008856f + 16.0f / 116.0f;
+        float lThresh = (softfloat32_t(0.008856f) * 903.3f).toFloat();
+        float fThresh = (softfloat32_t(7.787f) * 0.008856f +
+                         softfloat32_t(16.0f) / 116.0f).toFloat();
 
         ocl::KernelArg srcarg = ocl::KernelArg::ReadOnlyNoSize(src),
                 dstarg = ocl::KernelArg::WriteOnly(dst),
