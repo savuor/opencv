@@ -7027,12 +7027,17 @@ struct RGB2Luv_f
             if( blueIdx == 0 )
                 std::swap(coeffs[i*3], coeffs[i*3+2]);
             CV_Assert( coeffs[i*3] >= 0 && coeffs[i*3+1] >= 0 && coeffs[i*3+2] >= 0 &&
-                      coeffs[i*3] + coeffs[i*3+1] + coeffs[i*3+2] < 1.5f );
+                      softfloat32_t(coeffs[i*3]) +
+                      softfloat32_t(coeffs[i*3+1]) +
+                      softfloat32_t(coeffs[i*3+2]) < 1.5f );
         }
 
-        float d = 1.f/std::max(whitept[0] + whitept[1]*15 + whitept[2]*3, FLT_EPSILON);
-        un = 4*whitept[0]*d*13;
-        vn = 9*whitept[1]*d*13;
+        softfloat32_t d = softfloat32_t(whitept[0]) +
+                          softfloat32_t(whitept[1])*15 +
+                          softfloat32_t(whitept[2])*3;
+        d = softfloat::one()/max(d, softfloat(FLT_EPSILON));
+        un = (d*13*4*whitept[0]).toFloat();
+        vn = (d*13*9*whitept[1]).toFloat();
 
         #if CV_SSE2
         haveSIMD = checkHardwareSupport(CV_CPU_SSE2);
@@ -7325,9 +7330,12 @@ struct Luv2RGB_f
             coeffs[i+blueIdx*3] = _coeffs[i+6];
         }
 
-        float d = 1.f/std::max(whitept[0] + whitept[1]*15 + whitept[2]*3, FLT_EPSILON);
-        un = 4*13*whitept[0]*d;
-        vn = 9*13*whitept[1]*d;
+        softfloat32_t d = softfloat32_t(whitept[0]) +
+                          softfloat32_t(whitept[1])*15 +
+                          softfloat32_t(whitept[2])*3;
+        d = softfloat::one()/max(d, softfloat(FLT_EPSILON));
+        un = (d*4*whitept[0]).toFloat();
+        vn = (d*9*whitept[1]).toFloat();
         #if CV_SSE2
         haveSIMD = checkHardwareSupport(CV_CPU_SSE2);
         #endif
