@@ -392,9 +392,9 @@ static void initLabTabs()
             compareAndPrint(x, (scale*i).toFloat(), i, "LabCbrtTab x");
             compareAndPrint(f_gold[i], f[i].toFloat(), i, "LabCbrtTab f");
         }
-        splineBuild(f, LAB_CBRT_TAB_SIZE, LabCbrtTab_gold);
+        splineBuild(f_gold, LAB_CBRT_TAB_SIZE, LabCbrtTab_gold);
 
-        for(i = 0; i <= LAB_CBRT_TAB_SIZE*4; i++)
+        for(i = 0; i < LAB_CBRT_TAB_SIZE*4; i++)
         {
             compareAndPrint(LabCbrtTab_gold[i], LabCbrtTab[i], i, "LabCbrtTab tab");
         }
@@ -424,7 +424,7 @@ static void initLabTabs()
         splineBuild(g_gold, GAMMA_TAB_SIZE, sRGBGammaTab_gold);
         splineBuild(ig_gold, GAMMA_TAB_SIZE, sRGBInvGammaTab_gold);
 
-        for(i = 0; i <= GAMMA_TAB_SIZE*4; i++)
+        for(i = 0; i < GAMMA_TAB_SIZE*4; i++)
         {
             compareAndPrint( sRGBGammaTab_gold[i], sRGBGammaTab[i], i, "sRGBGammaTab tab" );
             compareAndPrint( sRGBInvGammaTab_gold[i], sRGBInvGammaTab[i], i, "sRGBInvGammaTab tab" );
