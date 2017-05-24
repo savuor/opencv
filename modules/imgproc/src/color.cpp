@@ -168,25 +168,26 @@ template<typename _Tp> static void splineBuild(const _Tp* f, int n, _Tp* tab)
     }
 }
 
-static void splineBuild(const softfloat32_t* f, int n, float* tab)
+static void splineBuild(const softfloat* f, int n, float* tab)
 {
-    softfloat32_t cn = 0;
-    softfloat32_t* sftab = reinterpret_cast<softfloat32_t*>(tab);
+    const softfloat f2(2), f3(3), f4(4);
+    softfloat cn(0);
+    softfloat* sftab = reinterpret_cast<softfloat*>(tab);
     int i;
     tab[0] = tab[1] = 0.0f;
 
     for(i = 1; i < n-1; i++)
     {
-        softfloat32_t t = (f[i+1] - f[i]*2 + f[i-1])*3;
-        softfloat32_t l = softfloat32_t::one()/(softfloat32_t(4) - sftab[(i-1)*4]);
+        softfloat t = (f[i+1] - f[i]*f2 + f[i-1])*f3;
+        softfloat l = softfloat::one()/(f4 - sftab[(i-1)*4]);
         sftab[i*4] = l; sftab[i*4+1] = (t - sftab[(i-1)*4+1])*l;
     }
 
     for(i = n-1; i >= 0; i--)
     {
-        softfloat32_t c = sftab[i*4+1] - sftab[i*4]*cn;
-        softfloat32_t b = f[i+1] - f[i] - (cn + c*2)/3;
-        softfloat32_t d = (cn - c)/3;
+        softfloat c = sftab[i*4+1] - sftab[i*4]*cn;
+        softfloat b = f[i+1] - f[i] - (cn + c*f2)/f3;
+        softfloat d = (cn - c)/f3;
         sftab[i*4] = f[i]; sftab[i*4+1] = b;
         sftab[i*4+2] = c; sftab[i*4+3] = d;
         cn = c;
@@ -5900,18 +5901,22 @@ static inline v_int32x4 mulFracConst(v_int32x4 v)
 #define clip(value) \
     value < 0.0f ? 0.0f : value > 1.0f ? 1.0f : value;
 
-static inline softfloat32_t applyGamma(softfloat32_t x)
+static inline softfloat applyGamma(softfloat x)
 {
     //return x <= 0.04045f ? x*(1.f/12.92f) : (float)std::pow((double)(x + 0.055)*(1./1.055), 2.4);
-    softfloat64_t xd = x.toF64();
-    return (xd <= 0.04045 ? xd/12.92 : f64_pow((xd + 0.055)/1.055, 2.4)).toF32();
+    softdouble xd = x;
+    return (xd <= softdouble(0.04045) ?
+                xd/softdouble(12.92) :
+                pow((xd + softdouble(0.055))/softdouble(1.055), softdouble(2.4)));
 }
 
-static inline softfloat32_t applyInvGamma(softfloat32_t x)
+static inline softfloat applyInvGamma(softfloat x)
 {
     //return x <= 0.0031308 ? x*12.92f : (float)(1.055*std::pow((double)x, 1./2.4) - 0.055);
-    softfloat64_t xd = x.toF64();
-    return (xd <= 0.0031308 ? xd*12.92 : f64_pow(xd, softfloat64_t::one()/2.4)*1.055 - 0.055).toF32();
+    softdouble xd = x;
+    return (xd <= softdouble(0.0031308) ?
+                xd*softdouble(12.92) :
+                pow(xd, softdouble::one()/softdouble(2.4))*softdouble(1.055) - softdouble(0.055));
 }
 
 static void initLabTabs()
@@ -5919,51 +5924,51 @@ static void initLabTabs()
     static bool initialized = false;
     if(!initialized)
     {
-        static const softfloat32_t lthresh(0.008856f), lscale(7.787f);
-        static const softfloat32_t lbias = softfloat32_t(16.f) / 116.f;
-        static const softfloat32_t f255(255);
+        static const softfloat lthresh(0.008856f), lscale(7.787f);
+        static const softfloat lbias = softfloat(16.f) / softfloat(116.f);
+        static const softfloat f255(255);
 
-        softfloat32_t f[LAB_CBRT_TAB_SIZE+1], g[GAMMA_TAB_SIZE+1], ig[GAMMA_TAB_SIZE+1];
-        softfloat32_t scale = softfloat32_t::one()/LabCbrtTabScale;
+        softfloat f[LAB_CBRT_TAB_SIZE+1], g[GAMMA_TAB_SIZE+1], ig[GAMMA_TAB_SIZE+1];
+        softfloat scale = softfloat::one()/softfloat(LabCbrtTabScale);
         int i;
         for(i = 0; i <= LAB_CBRT_TAB_SIZE; i++)
         {
-            softfloat32_t x = scale*i;
-            f[i] = x < lthresh ? f32_mulAdd(x, lscale, lbias) : f32_cbrt(x);
+            softfloat x = scale*softfloat(i);
+            f[i] = x < lthresh ? mulAdd(x, lscale, lbias) : cbrt(x);
         }
         splineBuild(f, LAB_CBRT_TAB_SIZE, LabCbrtTab);
 
-        scale = softfloat32_t::one()/GammaTabScale;
+        scale = softfloat::one()/softfloat(GammaTabScale);
         for(i = 0; i <= GAMMA_TAB_SIZE; i++)
         {
-            softfloat32_t x = scale*i;
+            softfloat x = scale*softfloat(i);
             g[i] = applyGamma(x);
             ig[i] = applyInvGamma(x);
         }
         splineBuild(g, GAMMA_TAB_SIZE, sRGBGammaTab);
         splineBuild(ig, GAMMA_TAB_SIZE, sRGBInvGammaTab);
 
-        static const softfloat32_t intScale(255*(1 << gamma_shift));
+        static const softfloat intScale(255*(1 << gamma_shift));
         for(i = 0; i < 256; i++)
         {
-            softfloat32_t x = softfloat32_t(i)/f255;
-            sRGBGammaTab_b[i] = (ushort)((intScale*applyGamma(x)).toI32());
+            softfloat x = softfloat(i)/f255;
+            sRGBGammaTab_b[i] = (ushort)(round(intScale*applyGamma(x)));
             linearGammaTab_b[i] = (ushort)(i*(1 << gamma_shift));
         }
-        static const softfloat32_t invScale = softfloat32_t::one()/INV_GAMMA_TAB_SIZE;
+        static const softfloat invScale = softfloat::one()/softfloat((int)INV_GAMMA_TAB_SIZE);
         for(i = 0; i < INV_GAMMA_TAB_SIZE; i++)
         {
-            softfloat32_t x = invScale*i;
-            sRGBInvGammaTab_b[i] = (ushort)((f255*applyInvGamma(x)).toI32());
-            linearInvGammaTab_b[i] = (ushort)((f255*x).toI32_minMag());
+            softfloat x = invScale*softfloat(i);
+            sRGBInvGammaTab_b[i] = (ushort)(round(f255*applyInvGamma(x)));
+            linearInvGammaTab_b[i] = (ushort)(trunc(f255*x));
         }
 
-        static const softfloat32_t cbTabScale(softfloat32_t::one()/(f255*(1 << gamma_shift)));
-        static const softfloat32_t lshift2(1 << lab_shift2);
+        static const softfloat cbTabScale(softfloat::one()/(f255*(1 << gamma_shift)));
+        static const softfloat lshift2(1 << lab_shift2);
         for(i = 0; i < LAB_CBRT_TAB_SIZE_B; i++)
         {
-            softfloat32_t x = cbTabScale*i;
-            LabCbrtTab_b[i] = (ushort)((lshift2 * (x < lthresh ? f32_mulAdd(x, lscale, lbias) : f32_cbrt(x))).toI32());
+            softfloat x = cbTabScale*softfloat(i);
+            LabCbrtTab_b[i] = (ushort)(round(lshift2 * (x < lthresh ? mulAdd(x, lscale, lbias) : cbrt(x))));
         }
 
         initialized = true;
@@ -5987,12 +5992,12 @@ struct RGB2Lab_b
         if (!_whitept)
             _whitept = D65;
 
-        static const softfloat32_t lshift(1 << lab_shift);
+        static const softfloat lshift(1 << lab_shift);
         for( int i = 0; i < _3; i++ )
         {
-            coeffs[i*3+(blueIdx^2)] = ((lshift*_coeffs[i*3  ])/_whitept[i]).toI32();
-            coeffs[i*3+1]           = ((lshift*_coeffs[i*3+1])/_whitept[i]).toI32();
-            coeffs[i*3+blueIdx]     = ((lshift*_coeffs[i*3+2])/_whitept[i]).toI32();
+            coeffs[i*3+(blueIdx^2)] = round((lshift*softfloat(_coeffs[i*3  ]))/softfloat(_whitept[i]));
+            coeffs[i*3+1]           = round((lshift*softfloat(_coeffs[i*3+1]))/softfloat(_whitept[i]));
+            coeffs[i*3+blueIdx]     = round((lshift*softfloat(_coeffs[i*3+2]))/softfloat(_whitept[i]));
 
             CV_Assert(coeffs[i*3] >= 0 && coeffs[i*3+1] >= 0 && coeffs[i*3+2] >= 0 &&
                       coeffs[i*3] + coeffs[i*3+1] + coeffs[i*3+2] < 2*(1 << lab_shift));
@@ -6050,22 +6055,22 @@ struct RGB2Lab_f
         if (!_whitept)
             _whitept = D65;
 
-        softfloat32_t scale[] = { softfloat32_t::one() / _whitept[0],
-                                  softfloat32_t::one(),
-                                  softfloat32_t::one() / _whitept[2] };
+        softfloat scale[] = { softfloat::one() / softfloat(_whitept[0]),
+                              softfloat::one(),
+                              softfloat::one() / softfloat(_whitept[2]) };
 
         for( int i = 0; i < _3; i++ )
         {
             int j = i * 3;
-            softfloat32_t c0 = scale[i] * _coeffs[j];
-            softfloat32_t c1 = scale[i] * _coeffs[j + 1];
-            softfloat32_t c2 = scale[i] * _coeffs[j + 2];
-            coeffs[j + (blueIdx ^ 2)] = c0.toFloat();
-            coeffs[j + 1]             = c1.toFloat();
-            coeffs[j + blueIdx]       = c2.toFloat();
+            softfloat c0 = scale[i] * softfloat(_coeffs[j    ]);
+            softfloat c1 = scale[i] * softfloat(_coeffs[j + 1]);
+            softfloat c2 = scale[i] * softfloat(_coeffs[j + 2]);
+            coeffs[j + (blueIdx ^ 2)] = c0;
+            coeffs[j + 1]             = c1;
+            coeffs[j + blueIdx]       = c2;
 
             CV_Assert( c0 >= 0 && c1 >= 0 && c2 >= 0 &&
-                       c0 + c1 + c2 < softfloat32_t(LabCbrtTabScale)*1.5f );
+                       c0 + c1 + c2 < softfloat(LabCbrtTabScale)*softfloat(1.5f) );
         }
     }
 
@@ -6079,7 +6084,7 @@ struct RGB2Lab_f
               C6 = coeffs[6], C7 = coeffs[7], C8 = coeffs[8];
         n *= 3;
 
-        static const float _a = (softfloat32_t(16) / 116).toFloat();
+        static const float _a = (softfloat(16) / softfloat(116));
         for (i = 0; i < n; i += 3, src += scn )
         {
             float R = clip(src[0]);
@@ -6134,14 +6139,14 @@ struct Lab2RGBfloat
 
         for( int i = 0; i < 3; i++ )
         {
-            coeffs[i+(blueIdx^2)*3] = (softfloat32_t(_coeffs[i]  )*_whitept[i]).toFloat();
-            coeffs[i+3]             = (softfloat32_t(_coeffs[i+3])*_whitept[i]).toFloat();
-            coeffs[i+blueIdx*3]     = (softfloat32_t(_coeffs[i+6])*_whitept[i]).toFloat();
+            coeffs[i+(blueIdx^2)*3] = softfloat(_coeffs[i]  )*softfloat(_whitept[i]);
+            coeffs[i+3]             = softfloat(_coeffs[i+3])*softfloat(_whitept[i]);
+            coeffs[i+blueIdx*3]     = softfloat(_coeffs[i+6])*softfloat(_whitept[i]);
         }
 
-        lThresh = (softfloat32_t(0.008856f) * 903.3f).toFloat();
-        fThresh = (softfloat32_t(7.787f) * 0.008856f +
-                   softfloat32_t(16.0f) / 116.0f).toFloat();
+        lThresh = softfloat(0.008856f) * softfloat(903.3f);
+        fThresh = softfloat(7.787f) * softfloat(0.008856f) +
+                  softfloat(16.0f) / softfloat(116.0f);
         #if CV_SSE2
         haveSIMD = checkHardwareSupport(CV_CPU_SSE2);
         #endif
@@ -6393,12 +6398,12 @@ struct Lab2RGBinteger
         if(!_whitept)
             _whitept = D65;
 
-        static const softfloat32_t lshift(1 << lab_shift);
+        static const softfloat lshift(1 << lab_shift);
         for(int i = 0; i < 3; i++)
         {
-            coeffs[i+(blueIdx)*3]   = ((lshift*_coeffs[i  ])*_whitept[i]).toI32();
-            coeffs[i+3]             = ((lshift*_coeffs[i+3])*_whitept[i]).toI32();
-            coeffs[i+(blueIdx^2)*3] = ((lshift*_coeffs[i+6])*_whitept[i]).toI32();
+            coeffs[i+(blueIdx)*3]   = round((lshift*softfloat(_coeffs[i  ]))*softfloat(_whitept[i]));
+            coeffs[i+3]             = round((lshift*softfloat(_coeffs[i+3]))*softfloat(_whitept[i]));
+            coeffs[i+(blueIdx^2)*3] = round((lshift*softfloat(_coeffs[i+6]))*softfloat(_whitept[i]));
         }
 
         tab = srgb ? sRGBInvGammaTab_b : linearInvGammaTab_b;
@@ -7027,17 +7032,17 @@ struct RGB2Luv_f
             if( blueIdx == 0 )
                 std::swap(coeffs[i*3], coeffs[i*3+2]);
             CV_Assert( coeffs[i*3] >= 0 && coeffs[i*3+1] >= 0 && coeffs[i*3+2] >= 0 &&
-                      softfloat32_t(coeffs[i*3]) +
-                      softfloat32_t(coeffs[i*3+1]) +
-                      softfloat32_t(coeffs[i*3+2]) < 1.5f );
+                      softfloat(coeffs[i*3]) +
+                      softfloat(coeffs[i*3+1]) +
+                      softfloat(coeffs[i*3+2]) < softfloat(1.5f) );
         }
 
-        softfloat32_t d = softfloat32_t(whitept[0]) +
-                          softfloat32_t(whitept[1])*15 +
-                          softfloat32_t(whitept[2])*3;
+        softfloat d = softfloat(whitept[0]) +
+                      softfloat(whitept[1])*softfloat(15) +
+                      softfloat(whitept[2])*softfloat(3);
         d = softfloat::one()/max(d, softfloat(FLT_EPSILON));
-        un = (d*13*4*whitept[0]).toFloat();
-        vn = (d*13*9*whitept[1]).toFloat();
+        un = softfloat(13*4)*d*softfloat(whitept[0]);
+        vn = softfloat(13*9)*d*softfloat(whitept[1]);
 
         #if CV_SSE2
         haveSIMD = checkHardwareSupport(CV_CPU_SSE2);
@@ -7330,12 +7335,12 @@ struct Luv2RGB_f
             coeffs[i+blueIdx*3] = _coeffs[i+6];
         }
 
-        softfloat32_t d = softfloat32_t(whitept[0]) +
-                          softfloat32_t(whitept[1])*15 +
-                          softfloat32_t(whitept[2])*3;
+        softfloat d = softfloat(whitept[0]) +
+                      softfloat(whitept[1])*softfloat(15) +
+                      softfloat(whitept[2])*softfloat(3);
         d = softfloat::one()/max(d, softfloat(FLT_EPSILON));
-        un = (d*13*4*whitept[0]).toFloat();
-        vn = (d*13*9*whitept[1]).toFloat();
+        un = softfloat(4*13)*d*softfloat(whitept[0]);
+        vn = softfloat(9*13)*d*softfloat(whitept[1]);
         #if CV_SSE2
         haveSIMD = checkHardwareSupport(CV_CPU_SSE2);
         #endif
@@ -9077,12 +9082,12 @@ static bool ocl_cvtColor( InputArray _src, OutputArray _dst, int code, int dcn )
             {
                 int coeffs[9];
                 const float * const _coeffs = sRGB2XYZ_D65, * const _whitept = D65;
-                static const softfloat32_t lshift(1 << lab_shift);
+                static const softfloat lshift(1 << lab_shift);
                 for( int i = 0; i < 3; i++ )
                 {
-                    coeffs[i*3+(bidx^2)] = ((lshift*_coeffs[i*3  ])/_whitept[i]).toI32();
-                    coeffs[i*3+1]        = ((lshift*_coeffs[i*3+1])/_whitept[i]).toI32();
-                    coeffs[i*3+bidx]     = ((lshift*_coeffs[i*3+2])/_whitept[i]).toI32();
+                    coeffs[i*3+(bidx^2)] = round(lshift*softfloat(_coeffs[i*3  ])/softfloat(_whitept[i]));
+                    coeffs[i*3+1]        = round(lshift*softfloat(_coeffs[i*3+1])/softfloat(_whitept[i]));
+                    coeffs[i*3+bidx]     = round(lshift*softfloat(_coeffs[i*3+2])/softfloat(_whitept[i]));
 
                     CV_Assert(coeffs[i*3] >= 0 && coeffs[i*3+1] >= 0 && coeffs[i*3+2] >= 0 &&
                               coeffs[i*3] + coeffs[i*3+1] + coeffs[i*3+2] < 2*(1 << lab_shift));
@@ -9111,32 +9116,32 @@ static bool ocl_cvtColor( InputArray _src, OutputArray _dst, int code, int dcn )
                 float coeffs[9];
                 const float * const _coeffs = sRGB2XYZ_D65, * const _whitept = D65;
 
-                softfloat32_t scale[] = { softfloat32_t::one() / _whitept[0],
-                                          softfloat32_t::one(),
-                                          softfloat32_t::one() / _whitept[2] };
+                softfloat scale[] = { softfloat::one() / softfloat(_whitept[0]),
+                                      softfloat::one(),
+                                      softfloat::one() / softfloat(_whitept[2]) };
 
                 for (int i = 0; i < 3; i++)
                 {
                     int j = i * 3;
 
-                    softfloat32_t c0 = (lab ? scale[i] : softfloat32_t::one()) * _coeffs[j];
-                    softfloat32_t c1 = (lab ? scale[i] : softfloat32_t::one()) * _coeffs[j + 1];
-                    softfloat32_t c2 = (lab ? scale[i] : softfloat32_t::one()) * _coeffs[j + 2];
+                    softfloat c0 = (lab ? scale[i] : softfloat::one()) * softfloat(_coeffs[j    ]);
+                    softfloat c1 = (lab ? scale[i] : softfloat::one()) * softfloat(_coeffs[j + 1]);
+                    softfloat c2 = (lab ? scale[i] : softfloat::one()) * softfloat(_coeffs[j + 2]);
 
-                    coeffs[j + (bidx ^ 2)] = c0.toFloat();
-                    coeffs[j + 1]          = c1.toFloat();
-                    coeffs[j + bidx]       = c2.toFloat();
+                    coeffs[j + (bidx ^ 2)] = c0;
+                    coeffs[j + 1]          = c1;
+                    coeffs[j + bidx]       = c2;
 
                     CV_Assert( c0 >= 0 && c1 >= 0 && c2 >= 0 &&
-                               c0 + c1 + c2 < softfloat32_t(1.5f)*(lab ? LabCbrtTabScale : 1));
+                               c0 + c1 + c2 < softfloat(1.5f)*(lab ? LabCbrtTabScale : 1));
                 }
 
-                softfloat32_t d = softfloat32_t(_whitept[0]) +
-                                  softfloat32_t(_whitept[1])*15 +
-                                  softfloat32_t(_whitept[2])*3;
+                softfloat d = softfloat(_whitept[0]) +
+                              softfloat(_whitept[1])*softfloat(15) +
+                              softfloat(_whitept[2])*softfloat(3);
                 d = softfloat::one()/max(d, softfloat(FLT_EPSILON));
-                un = (d*13*4*_whitept[0]).toFloat();
-                vn = (d*13*9*_whitept[1]).toFloat();
+                un = d*softfloat(13*4)*softfloat(_whitept[0]);
+                vn = d*softfloat(13*9)*softfloat(_whitept[1]);
 
                 Mat(1, 9, CV_32FC1, coeffs).copyTo(ucoeffs);
             }
@@ -9196,17 +9201,17 @@ static bool ocl_cvtColor( InputArray _src, OutputArray _dst, int code, int dcn )
 
             for( int i = 0; i < 3; i++ )
             {
-                coeffs[i+(bidx^2)*3] = (softfloat32_t(_coeffs[i]  )*(lab ? _whitept[i] : 1)).toFloat();
-                coeffs[i+3]          = (softfloat32_t(_coeffs[i+3])*(lab ? _whitept[i] : 1)).toFloat();
-                coeffs[i+bidx*3]     = (softfloat32_t(_coeffs[i+6])*(lab ? _whitept[i] : 1)).toFloat();
+                coeffs[i+(bidx^2)*3] = softfloat(_coeffs[i]  )*softfloat(lab ? _whitept[i] : 1);
+                coeffs[i+3]          = softfloat(_coeffs[i+3])*softfloat(lab ? _whitept[i] : 1);
+                coeffs[i+bidx*3]     = softfloat(_coeffs[i+6])*softfloat(lab ? _whitept[i] : 1);
             }
 
-            softfloat32_t d = softfloat32_t(_whitept[0]) +
-                              softfloat32_t(_whitept[1])*15 +
-                              softfloat32_t(_whitept[2])*3;
+            softfloat d = softfloat(_whitept[0]) +
+                          softfloat(_whitept[1])*softfloat(15) +
+                          softfloat(_whitept[2])*softfloat(3);
             d = softfloat::one()/max(d, softfloat(FLT_EPSILON));
-            un = (d*13*4*_whitept[0]).toFloat();
-            vn = (d*13*9*_whitept[1]).toFloat();
+            un = softfloat(4*13)*d*softfloat(_whitept[0]);
+            vn = softfloat(9*13)*d*softfloat(_whitept[1]);
 
             Mat(1, 9, CV_32FC1, coeffs).copyTo(ucoeffs);
         }
@@ -9214,9 +9219,9 @@ static bool ocl_cvtColor( InputArray _src, OutputArray _dst, int code, int dcn )
         _dst.create(sz, CV_MAKETYPE(depth, dcn));
         dst = _dst.getUMat();
 
-        float lThresh = (softfloat32_t(0.008856f) * 903.3f).toFloat();
-        float fThresh = (softfloat32_t(7.787f) * 0.008856f +
-                         softfloat32_t(16.0f) / 116.0f).toFloat();
+        float lThresh = softfloat(0.008856f) * softfloat(903.3f);
+        float fThresh = softfloat(7.787f) * softfloat(0.008856f) +
+                        softfloat(16.0f) / softfloat(116.0f);
 
         ocl::KernelArg srcarg = ocl::KernelArg::ReadOnlyNoSize(src),
                 dstarg = ocl::KernelArg::WriteOnly(dst),
