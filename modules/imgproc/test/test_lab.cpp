@@ -440,15 +440,15 @@ static void initLabTabs()
         for(i = 0; i < 256; i++)
         {
             softfloat x = softfloat(i)/f255;
-            sRGBGammaTab_b[i] = (ushort)(round(intScale*applyGamma(x)));
+            sRGBGammaTab_b[i] = (ushort)(cvRound(intScale*applyGamma(x)));
             linearGammaTab_b[i] = (ushort)(i*(1 << gamma_shift));
         }
         static const softfloat invScale = softfloat::one()/softfloat((int)INV_GAMMA_TAB_SIZE);
         for(i = 0; i < INV_GAMMA_TAB_SIZE; i++)
         {
             softfloat x = invScale*softfloat(i);
-            sRGBInvGammaTab_b[i] = (ushort)(round(f255*applyInvGamma(x)));
-            linearInvGammaTab_b[i] = (ushort)(trunc(f255*x));
+            sRGBInvGammaTab_b[i] = (ushort)(cvRound(f255*applyInvGamma(x)));
+            linearInvGammaTab_b[i] = (ushort)(cvTrunc(f255*x));
         }
 
         //TODO: remove
@@ -478,7 +478,7 @@ static void initLabTabs()
         for(i = 0; i < LAB_CBRT_TAB_SIZE_B; i++)
         {
             softfloat x = cbTabScale*softfloat(i);
-            LabCbrtTab_b[i] = (ushort)(round(lshift2 * (x < lthresh ? mulAdd(x, lscale, lbias) : cbrt(x))));
+            LabCbrtTab_b[i] = (ushort)(cvRound(lshift2 * (x < lthresh ? mulAdd(x, lscale, lbias) : cbrt(x))));
         }
 
         //TODO: remove
@@ -566,9 +566,9 @@ static void initLabTabs()
                         softfloat b = f200 * (FY - FZ);
 
                         int idx = p*3 + q*LAB_LUT_DIM*3 + r*LAB_LUT_DIM*LAB_LUT_DIM*3;
-                        RGB2Labprev[idx]   = (int16_t)(round(lbase*L/f100));
-                        RGB2Labprev[idx+1] = (int16_t)(round(lbase*(a + f128)/f256));
-                        RGB2Labprev[idx+2] = (int16_t)(round(lbase*(b + f128)/f256));
+                        RGB2Labprev[idx]   = (int16_t)(cvRound(lbase*L/f100));
+                        RGB2Labprev[idx+1] = (int16_t)(cvRound(lbase*(a + f128)/f256));
+                        RGB2Labprev[idx+2] = (int16_t)(cvRound(lbase*(b + f128)/f256));
 
                         //TODO: remove
                         //RGB 2 Lab LUT building
@@ -1282,9 +1282,9 @@ struct RGB2Lab_b
             static const softfloat lshift(1 << lab_shift);
             for( int i = 0; i < _3; i++ )
             {
-                coeffs[i*3+(blueIdx^2)] = round((lshift*softfloat(_coeffs[i*3  ]))/softfloat(_whitept[i]));
-                coeffs[i*3+1]           = round((lshift*softfloat(_coeffs[i*3+1]))/softfloat(_whitept[i]));
-                coeffs[i*3+blueIdx]     = round((lshift*softfloat(_coeffs[i*3+2]))/softfloat(_whitept[i]));
+                coeffs[i*3+(blueIdx^2)] = cvRound((lshift*softfloat(_coeffs[i*3  ]))/softfloat(_whitept[i]));
+                coeffs[i*3+1]           = cvRound((lshift*softfloat(_coeffs[i*3+1]))/softfloat(_whitept[i]));
+                coeffs[i*3+blueIdx]     = cvRound((lshift*softfloat(_coeffs[i*3+2]))/softfloat(_whitept[i]));
 
                 CV_Assert(coeffs[i*3] >= 0 && coeffs[i*3+1] >= 0 && coeffs[i*3+2] >= 0 &&
                           coeffs[i*3] + coeffs[i*3+1] + coeffs[i*3+2] < 2*(1 << lab_shift));
@@ -1373,9 +1373,9 @@ struct Lab2RGBinteger
             static const softfloat lshift(1 << lab_shift);
             for(int i = 0; i < 3; i++)
             {
-                coeffs[i+(blueIdx)*3]   = round(lshift*softfloat(_coeffs[i  ])*softfloat(_whitept[i]));
-                coeffs[i+3]             = round(lshift*softfloat(_coeffs[i+3])*softfloat(_whitept[i]));
-                coeffs[i+(blueIdx^2)*3] = round(lshift*softfloat(_coeffs[i+6])*softfloat(_whitept[i]));
+                coeffs[i+(blueIdx)*3]   = cvRound(lshift*softfloat(_coeffs[i  ])*softfloat(_whitept[i]));
+                coeffs[i+3]             = cvRound(lshift*softfloat(_coeffs[i+3])*softfloat(_whitept[i]));
+                coeffs[i+(blueIdx^2)*3] = cvRound(lshift*softfloat(_coeffs[i+6])*softfloat(_whitept[i]));
             }
         }
         else

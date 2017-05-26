@@ -5952,15 +5952,15 @@ static void initLabTabs()
         for(i = 0; i < 256; i++)
         {
             softfloat x = softfloat(i)/f255;
-            sRGBGammaTab_b[i] = (ushort)(round(intScale*applyGamma(x)));
+            sRGBGammaTab_b[i] = (ushort)(cvRound(intScale*applyGamma(x)));
             linearGammaTab_b[i] = (ushort)(i*(1 << gamma_shift));
         }
         static const softfloat invScale = softfloat::one()/softfloat((int)INV_GAMMA_TAB_SIZE);
         for(i = 0; i < INV_GAMMA_TAB_SIZE; i++)
         {
             softfloat x = invScale*softfloat(i);
-            sRGBInvGammaTab_b[i] = (ushort)(round(f255*applyInvGamma(x)));
-            linearInvGammaTab_b[i] = (ushort)(trunc(f255*x));
+            sRGBInvGammaTab_b[i] = (ushort)(cvRound(f255*applyInvGamma(x)));
+            linearInvGammaTab_b[i] = (ushort)(cvTrunc(f255*x));
         }
 
         static const softfloat cbTabScale(softfloat::one()/(f255*(1 << gamma_shift)));
@@ -5968,7 +5968,7 @@ static void initLabTabs()
         for(i = 0; i < LAB_CBRT_TAB_SIZE_B; i++)
         {
             softfloat x = cbTabScale*softfloat(i);
-            LabCbrtTab_b[i] = (ushort)(round(lshift2 * (x < lthresh ? mulAdd(x, lscale, lbias) : cbrt(x))));
+            LabCbrtTab_b[i] = (ushort)(cvRound(lshift2 * (x < lthresh ? mulAdd(x, lscale, lbias) : cbrt(x))));
         }
 
         initialized = true;
@@ -5995,9 +5995,9 @@ struct RGB2Lab_b
         static const softfloat lshift(1 << lab_shift);
         for( int i = 0; i < _3; i++ )
         {
-            coeffs[i*3+(blueIdx^2)] = round((lshift*softfloat(_coeffs[i*3  ]))/softfloat(_whitept[i]));
-            coeffs[i*3+1]           = round((lshift*softfloat(_coeffs[i*3+1]))/softfloat(_whitept[i]));
-            coeffs[i*3+blueIdx]     = round((lshift*softfloat(_coeffs[i*3+2]))/softfloat(_whitept[i]));
+            coeffs[i*3+(blueIdx^2)] = cvRound((lshift*softfloat(_coeffs[i*3  ]))/softfloat(_whitept[i]));
+            coeffs[i*3+1]           = cvRound((lshift*softfloat(_coeffs[i*3+1]))/softfloat(_whitept[i]));
+            coeffs[i*3+blueIdx]     = cvRound((lshift*softfloat(_coeffs[i*3+2]))/softfloat(_whitept[i]));
 
             CV_Assert(coeffs[i*3] >= 0 && coeffs[i*3+1] >= 0 && coeffs[i*3+2] >= 0 &&
                       coeffs[i*3] + coeffs[i*3+1] + coeffs[i*3+2] < 2*(1 << lab_shift));
@@ -6401,9 +6401,9 @@ struct Lab2RGBinteger
         static const softfloat lshift(1 << lab_shift);
         for(int i = 0; i < 3; i++)
         {
-            coeffs[i+(blueIdx)*3]   = round((lshift*softfloat(_coeffs[i  ]))*softfloat(_whitept[i]));
-            coeffs[i+3]             = round((lshift*softfloat(_coeffs[i+3]))*softfloat(_whitept[i]));
-            coeffs[i+(blueIdx^2)*3] = round((lshift*softfloat(_coeffs[i+6]))*softfloat(_whitept[i]));
+            coeffs[i+(blueIdx)*3]   = cvRound((lshift*softfloat(_coeffs[i  ]))*softfloat(_whitept[i]));
+            coeffs[i+3]             = cvRound((lshift*softfloat(_coeffs[i+3]))*softfloat(_whitept[i]));
+            coeffs[i+(blueIdx^2)*3] = cvRound((lshift*softfloat(_coeffs[i+6]))*softfloat(_whitept[i]));
         }
 
         tab = srgb ? sRGBInvGammaTab_b : linearInvGammaTab_b;
@@ -7041,8 +7041,8 @@ struct RGB2Luv_f
                       softfloat(whitept[1])*softfloat(15) +
                       softfloat(whitept[2])*softfloat(3);
         d = softfloat::one()/max(d, softfloat(FLT_EPSILON));
-        un = softfloat(13*4)*d*softfloat(whitept[0]);
-        vn = softfloat(13*9)*d*softfloat(whitept[1]);
+        un = d*softfloat(13*4)*softfloat(whitept[0]);
+        vn = d*softfloat(13*9)*softfloat(whitept[1]);
 
         #if CV_SSE2
         haveSIMD = checkHardwareSupport(CV_CPU_SSE2);
@@ -9085,9 +9085,9 @@ static bool ocl_cvtColor( InputArray _src, OutputArray _dst, int code, int dcn )
                 static const softfloat lshift(1 << lab_shift);
                 for( int i = 0; i < 3; i++ )
                 {
-                    coeffs[i*3+(bidx^2)] = round(lshift*softfloat(_coeffs[i*3  ])/softfloat(_whitept[i]));
-                    coeffs[i*3+1]        = round(lshift*softfloat(_coeffs[i*3+1])/softfloat(_whitept[i]));
-                    coeffs[i*3+bidx]     = round(lshift*softfloat(_coeffs[i*3+2])/softfloat(_whitept[i]));
+                    coeffs[i*3+(bidx^2)] = cvRound(lshift*softfloat(_coeffs[i*3  ])/softfloat(_whitept[i]));
+                    coeffs[i*3+1]        = cvRound(lshift*softfloat(_coeffs[i*3+1])/softfloat(_whitept[i]));
+                    coeffs[i*3+bidx]     = cvRound(lshift*softfloat(_coeffs[i*3+2])/softfloat(_whitept[i]));
 
                     CV_Assert(coeffs[i*3] >= 0 && coeffs[i*3+1] >= 0 && coeffs[i*3+2] >= 0 &&
                               coeffs[i*3] + coeffs[i*3+1] + coeffs[i*3+2] < 2*(1 << lab_shift));
@@ -9133,7 +9133,7 @@ static bool ocl_cvtColor( InputArray _src, OutputArray _dst, int code, int dcn )
                     coeffs[j + bidx]       = c2;
 
                     CV_Assert( c0 >= 0 && c1 >= 0 && c2 >= 0 &&
-                               c0 + c1 + c2 < softfloat(1.5f)*(lab ? LabCbrtTabScale : 1));
+                               c0 + c1 + c2 < softfloat(1.5f)*softfloat(lab ? LabCbrtTabScale : 1));
                 }
 
                 softfloat d = softfloat(_whitept[0]) +
