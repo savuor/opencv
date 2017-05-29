@@ -41,13 +41,6 @@
 
 #include "test_precomp.hpp"
 
-//to be removed
-#include "opencv2/core.hpp"
-#include "opencv2/core/hal/interface.h"
-#include "opencv2/core/hal/intrin.hpp"
-#include "opencv2/core/sse_utils.hpp"
-
-
 using namespace cv;
 using namespace std;
 
