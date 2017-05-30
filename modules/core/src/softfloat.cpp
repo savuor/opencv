@@ -608,37 +608,6 @@ static inline struct uint128 softfloat_shortShiftRightJam128(uint64_t a64, uint6
 }
 
 /*----------------------------------------------------------------------------
-| Shifts the 128 bits formed by concatenating 'a' and 'extra' right by 64
-| _plus_ the number of bits given in 'dist', which must not be zero.  This
-| shifted value is at most 64 nonzero bits and is returned in the 'v' field
-| of the 'struct uint64_extra' result.  The 64-bit 'extra' field of the result
-| contains a value formed as follows from the bits that were shifted off:  The
-| _last_ bit shifted off is the most-significant bit of the 'extra' field, and
-| the other 63 bits of the 'extra' field are all zero if and only if _all_but_
-| _the_last_ bits shifted off were all zero.
-|   (This function makes more sense if 'a' and 'extra' are considered to form
-| an unsigned fixed-point number with binary point between 'a' and 'extra'.
-| This fixed-point value is shifted right by the number of bits given in
-| 'dist', and the integer part of this shifted value is returned in the 'v'
-| field of the result.  The fractional part of the shifted value is modified
-| as described above and returned in the 'extra' field of the result.)
-*----------------------------------------------------------------------------*/
-static inline struct uint64_extra softfloat_shiftRightJam64Extra(uint64_t a, uint64_t extra, uint_fast32_t dist )
-{
-    struct uint64_extra z;
-    if ( dist < 64 ) {
-        z.v = a>>dist;
-        //fixed unsigned unary minus: -x == ~x + 1
-        z.extra = a<<((~dist + 1) & 63);
-    } else {
-        z.v = 0;
-        z.extra = (dist == 64) ? a : (a != 0);
-    }
-    z.extra |= (extra != 0);
-    return z;
-}
-
-/*----------------------------------------------------------------------------
 | Shifts the 128 bits formed by concatenating 'a64' and 'a0' right by the
 | number of bits given in 'dist', which must not be zero.  If any nonzero bits
 | are shifted off, they are "jammed" into the least-significant bit of the
