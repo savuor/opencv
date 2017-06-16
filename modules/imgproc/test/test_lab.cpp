@@ -251,6 +251,9 @@ enum
 };
 static int16_t RGB2LabLUT_s16[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3*8];
 static int16_t trilinearLUT[TRILINEAR_BASE*TRILINEAR_BASE*TRILINEAR_BASE*8];
+static int LabToYF_b[256*2];
+static const int minABvalue = -8145;
+static int abToXZ_b[LAB_BASE*9/4];
 
 template <uint v>
 struct SignificantBits
@@ -262,6 +265,39 @@ template <>
 struct SignificantBits<0>
 {
     static const uint bits = 0;
+};
+
+// v = v/d, d != 2^n, mul >= 0
+template<int w, long long int d, bool round>
+struct FracConst
+{
+static const int r = w + SignificantBits<d>::bits - 1;
+static const int pmod = (1 << r)%d;
+static const int f = (1ll << r)/d;
+static const int vmul = (pmod*2 > d ) ? (f+1) : f;
+static const int vadd = ((round ? 1LL : 0) << (r-1)) + ((pmod*2 > d ) ? 0 : f);
+static inline int calc(int v) { return (v*vmul + vadd) >> r; }
+};
+
+// v = v*mul/d + toAdd, d != 2^n, mul >= 0
+template<int w, long long int d, long long int mul, long long int toAdd>
+struct MulFracConst
+{
+static const long long int r = w + SignificantBits<d>::bits - 1;
+static const long long int pmod = (1ll << r)%d;
+static const long long int f = (1ll << r)/d;
+static const long long int vfp1 = pmod*2 > d ? (f + 1) : f;
+static const long long int adc  = pmod*2 > d ? (1ll << (r - 1)) : f + (1ll << (r - 1));
+static const long long int vmul = (pmod*2 > d ) ? mul*(f+1) : mul*f;
+//static const long long int vadd = ( (toAdd << r) + mul*(1LL << (r-1)) ) + ((pmod*2 > d ) ? 0 : mul*f);
+static const long long int vadd = ( (toAdd << r) + (1LL << (r-1)) ) + ((pmod*2 > d ) ? 0 : f);
+
+static inline int calc(int v) { return (v*vmul + vadd) >> r; }
+static inline v_int32x4 calc(v_int32x4 v)
+{
+    return v;
+}
+
 };
 
 // v = v*mul/d + toAdd, d != 2^n, mul >= 0
@@ -276,6 +312,7 @@ static inline int mulFracConst(int v)
         f = (1ll << r)/d,
         vfp1 = pmod*2 > d ? (f + 1) : f,
         adc  = pmod*2 > d ? (1ll << (r - 1)) : f + (1ll << (r - 1))
+        //adc  = mul*( pmod*2 > d ? (1ll << (r - 1)) : f + (1ll << (r - 1)) )
     };
 
     //v = toAdd + mul*CV_DESCALE((pmod*2 > d) ? v*(f+1) : (v+1)*f, r);
@@ -332,7 +369,7 @@ static ushort LabCbrtTab_b_gold[LAB_CBRT_TAB_SIZE_B];
 
 template<typename T> inline void compareAndPrint(T a, T b, int i, string s)
 {
-    if(a != b)
+    if(false && a != b) //disabled
     {
         cout << s << " at i = " << i << " a = " << a << " b = " << b << " (a-b) = " << (a - b) << endl;
     }
@@ -490,6 +527,52 @@ static void initLabTabs()
             compareAndPrint(LabCbrtTab_b_gold[i], LabCbrtTab_b[i], i, "LabCbrtTab_b tab" );
         }
         //TODO: up to this
+
+        //Lookup table for L to y and ify calculations
+        static const int BASE = (1 << 14);
+        for(i = 0; i < 256; i++)
+        {
+            int y, ify;
+            //0.008856 * 903.3 * 255.0 / 100.0 == 20.39904324
+            if( i <= 20)
+            {
+                //yy = li / 903.3f;
+                //y = L*100/903.3f;
+                y = cvRound(softfloat(i*BASE*1000)/softfloat(9033*255));
+                //fy = 7.787f * yy + 16.0f / 116.0f;
+                ify = cvRound(softfloat(BASE)*(softfloat(16)/softfloat(116) + softfloat(i*7787)/softfloat(255*9033)));
+            }
+            else
+            {
+                //fy = (li + 16.0f) / 116.0f;
+                softfloat fy = (softfloat(i*100*BASE)/softfloat(255*116) +
+                                softfloat(16*BASE)/softfloat(116));
+                ify = cvRound(fy);
+                //yy = fy * fy * fy;
+                y = cvRound(fy*fy*fy/softfloat(BASE*BASE));
+            }
+
+            LabToYF_b[i*2  ] = y;
+            LabToYF_b[i*2+1] = ify;
+        }
+
+        //Lookup table for a,b to x,z conversion
+        for(i = minABvalue; i < LAB_BASE*9/4+minABvalue; i++)
+        {
+            int v;
+            //(7.787f * 0.008856f + 16.0f / 116.0f)*BASE = 3389.730
+            if(i <= 3390)
+            {
+                //fxz[k] = (fxz[k] - 16.0f / 116.0f) / 7.787f;
+                v = i*1000/7787 - BASE*16/116*1000/7787;
+            }
+            else
+            {
+                //fxz[k] = fxz[k] * fxz[k] * fxz[k];
+                v = i*i/BASE*i/BASE;
+            }
+            abToXZ_b[i-minABvalue] = v;
+        }
 
         if(enableRGB2LabInterpolation)
         {
@@ -1392,50 +1475,41 @@ struct Lab2RGBinteger
                      (enableBitExactness ? linearInvGammaTab_b : linearInvGammaTab_b_gold);
     }
 
-    // L, a, b should be in [-BASE; +BASE]
-    inline void process(const int L, const int a, const int b, int& ro, int& go, int& bo) const
+    // L, a, b should be in their natural range
+    inline void process(const uchar LL, const uchar aa, const uchar bb, int& ro, int& go, int& bo) const
     {
         int x, y, z;
-
         int ify;
-        if(L <= lThresh)
-        {
-            //yy = li / 903.3f;
-            //y = L*100/903.3f;
-            y = mulFracConst<14, 9033, 1000, 0>(L);
 
-            //fy = 7.787f * yy + 16.0f / 116.0f;
-            ify = base16_116 + L*7787/9033;
-        }
-        else
-        {
-            //fy = (li + 16.0f) / 116.0f;
-            ify = L*100/116 + base16_116;
-
-            //yy = fy * fy * fy;
-            y = ify*ify/BASE*ify/BASE;
-        }
+        y   = LabToYF_b[LL*2  ];
+        ify = LabToYF_b[LL*2+1];
 
         //float fxz[] = { ai / 500.0f + fy, fy - bi / 200.0f };
         int adiv, bdiv;
-        //adiv = a*256/500, bdiv = b*256/200;
-        adiv = mulFracConst<24, 500, 256, 0>(a);
-        bdiv = mulFracConst<24, 200, 256, 0>(b);
+        adiv = aa*BASE/500 - 128*BASE/500, bdiv = bb*BASE/200 - 128*BASE/200;
 
         int ifxz[] = {ify + adiv, ify - bdiv};
+
+//        static int minv =  100000000;
+//        static int maxv = -100000000;
+
         for(int k = 0; k < 2; k++)
         {
             int& v = ifxz[k];
-            if(v <= fThresh)
-            {
-                //fxz[k] = (fxz[k] - 16.0f / 116.0f) / 7.787f;
-                v = v*1000/7787 - BASE*16/116*1000/7787;
-            }
-            else
-            {
-                //fxz[k] = fxz[k] * fxz[k] * fxz[k];
-                v = v*v/BASE*v/BASE;
-            }
+//            if(v < minv) { minv = v; cout << "minv: " << minv << endl; }
+//            if(v > maxv) { maxv = v; cout << "maxv: " << maxv << endl; }
+
+//            if(v <= fThresh)
+//            {
+//                //fxz[k] = (fxz[k] - 16.0f / 116.0f) / 7.787f;
+//                v = v*1000/7787 - BASE*16/116*1000/7787;
+//            }
+//            else
+//            {
+//                //fxz[k] = fxz[k] * fxz[k] * fxz[k];
+//                v = v*v/BASE*v/BASE;
+//            }
+            v = abToXZ_b[v-minABvalue];
         }
         x = ifxz[0]; /* y = y */; z = ifxz[1];
 
@@ -1456,72 +1530,65 @@ struct Lab2RGBinteger
         bo = tab[bo];
     }
 
-    // L, a, b should be in [-BASE; +BASE]
-    inline void processLabToXYZ(v_int32x4  liv, v_int32x4  aiv, v_int32x4  biv,
-                                v_int32x4& xiv, v_int32x4& yiv, v_int32x4& ziv) const
+    // L, a, b shoule be in their natural range
+    inline void processLabToXYZ(v_uint8x16  lv, v_uint8x16  av, v_uint8x16  bv,
+                                v_int32x4& xiv0, v_int32x4& yiv0, v_int32x4& ziv0,
+                                v_int32x4& xiv1, v_int32x4& yiv1, v_int32x4& ziv1,
+                                v_int32x4& xiv2, v_int32x4& yiv2, v_int32x4& ziv2,
+                                v_int32x4& xiv3, v_int32x4& yiv3, v_int32x4& ziv3) const
+
+
+//    inline void processLabToXYZ(v_int32x4  lv, v_int32x4  av, v_int32x4  bv,
+//                                v_int32x4& xiv, v_int32x4& yiv, v_int32x4& ziv) const
     {
-        v_int32x4 ify;
-        v_int32x4 y_lt, y_gt;
-        v_int32x4 ify_lt, ify_gt;
+        v_uint16x8 lv0, lv1;
+        v_expand(lv, lv0, lv1);
+        // Load Y and IFY values from lookup-table
+        uint16_t CV_DECL_ALIGNED(16) v_lv0[4], v_lv1[4];
+        v_store_aligned(v_lv0, (lv0 << 1)); v_store_aligned(v_lv1, (lv1 << 1));
+        v_int32x4 ify0, ify1, ify2, ify3;
+        // y = LabToYF_b[L_value*2], ify = LabToYF_b[L_value*2 + 1]
+        yiv0 = v_int32x4(LabToYF_b[v_lv0[0]  ], LabToYF_b[v_lv0[1]  ], LabToYF_b[v_lv0[2]  ], LabToYF_b[v_lv0[3]  ]);
+        yiv1 = v_int32x4(LabToYF_b[v_lv1[0]  ], LabToYF_b[v_lv1[1]  ], LabToYF_b[v_lv1[2]  ], LabToYF_b[v_lv1[3]  ]);
+        yiv2 = v_int32x4(LabToYF_b[v_lv2[0]  ], LabToYF_b[v_lv2[1]  ], LabToYF_b[v_lv2[2]  ], LabToYF_b[v_lv2[3]  ]);
+        yiv3 = v_int32x4(LabToYF_b[v_lv3[0]  ], LabToYF_b[v_lv3[1]  ], LabToYF_b[v_lv3[2]  ], LabToYF_b[v_lv3[3]  ]);
 
-        // Less-than part
-        /* y = L*100/903.3f; // == mulFracConst<14, 9033, 1000, 0>(L); */
-        y_lt = mulFracConst<14, 9033, 1000, 0>(liv);
+        ify0 = v_int32x4(LabToYF_b[v_lv0[0]+1], LabToYF_b[v_lv0[1]+1], LabToYF_b[v_lv0[2]+1], LabToYF_b[v_lv0[3]+1]);
+        ify1 = v_int32x4(LabToYF_b[v_lv1[0]+1], LabToYF_b[v_lv1[1]+1], LabToYF_b[v_lv1[2]+1], LabToYF_b[v_lv1[3]+1]);
+        ify2 = v_int32x4(LabToYF_b[v_lv2[0]+1], LabToYF_b[v_lv2[1]+1], LabToYF_b[v_lv2[2]+1], LabToYF_b[v_lv2[3]+1]);
+        ify3 = v_int32x4(LabToYF_b[v_lv3[0]+1], LabToYF_b[v_lv3[1]+1], LabToYF_b[v_lv3[2]+1], LabToYF_b[v_lv3[3]+1]);
 
-        /* //fy = 7.787f * yy + 16.0f / 116.0f;
-            ify = mulFracConst<14, 1000, 7783, base16_116>(y);
-            ify = L*7783/9033 + base16_116; */
-        ify_lt = mulFracConst<14, 9033, 7783, base16_116>(liv);
+        v_int16x8 adiv0, adiv1, bdiv0, bdiv1;
+        v_uint16x8 av0, av1, bv0, bv1;
+        v_expand(av, av0, av1); v_expand(bv, bv0, bv1);
+        //adiv = aa*BASE/500 - 128*BASE/500, bdiv = bb*BASE/200 - 128*BASE/200;
+        //approximations with reasonable precision
+        v_uint16x8 mulA = v_setall_u16(53687), subA = v_setall_u16(128*BASE/500);
+        v_uint32x4 ma00, ma01, ma10, ma11;
+        v_uint32x4 addA = v_setall_u32(1 << 7);
+        v_mul_expand((av0 + (av0 << 2)), mulA, ma00, ma01);
+        v_mul_expand((av1 + (av1 << 2)), mulA, ma10, ma11);
+        adiv0 = v_pack(((ma00 + addA) >> 13), ((ma01 + addA) >> 13)) - subA;
+        adiv1 = v_pack(((ma10 + addA) >> 13), ((ma11 + addA) >> 13)) - subA;
+        //TODO: finish this
 
-        // Greater-than part
-        /* ify = L*100/116 + base16_116; */
-        ify_gt = mulFracConst<20, 116, 100, base16_116>(liv);
-
-        /* y = ify*ify/BASE*ify/BASE; */
-        y_gt = (((ify_gt*ify_gt) >> base_shift)*ify_gt) >> base_shift;
-
-        // Combining LT and GT parts
-        /* y, ify = (L <= lThresh) ? ... : ... ; */
-        v_int32x4 mask = liv <= v_setall_s32(lThresh);
-        yiv = v_select(mask, y_lt, y_gt);
-        ify = v_select(mask, ify_lt, ify_gt);
-
-        /*
-            adiv = mulFracConst<24, 500, 256, 0>(a);
-            bdiv = mulFracConst<24, 200, 256, 0>(b);
-            int ifxz[] = {ify + adiv, ify - bdiv};
-        */
         v_int32x4 adiv, bdiv;
-        adiv = mulFracConst<24, 500, 256, 0>(aiv);
-        bdiv = mulFracConst<24, 200, 256, 0>(biv);
+        //adiv = aa*BASE/500 - 128*BASE/500, bdiv = bb*BASE/200 - 128*BASE/200;
+
+        //approximations with reasonable precision
+        adiv = (((av + (av << 2))*v_setall_s32(53687) + v_setall_s32(1 << 7)) >> 13) - v_setall_s32(128*BASE/500);
+        bdiv = ((bv*v_setall_s32(41943) + v_setall_s32(1 << 4)) >> 9) - v_setall_s32(128*BASE/200 - 1);
 
         /* x = ifxz[0]; y = y; z = ifxz[1]; */
         xiv = ify + adiv;
         ziv = ify - bdiv;
 
-        v_int32x4 v_lt, v_gt;
-        // k = 0
-        /* v = (v <= fThresh) ? ... : ... ; */
-        mask = xiv <= v_setall_s32(fThresh);
-
-        // Less-than part
-        /* v = v*1000/7787 - BASE*16/116*1000/7787; */
-        v_lt = mulFracConst<14, 7787, 1000, -BASE*16/116*1000/7787>(xiv);
-
-        // Greater-than part
-        /* v = v*v/BASE*v/BASE; */
-        v_gt = (((xiv*xiv) >> base_shift) * xiv) >> base_shift;
-
-        // Combining LT ang GT parts
-        xiv = v_select(mask, v_lt, v_gt);
-
-        // k = 1: the same as above but for z
-        mask = ziv <= v_setall_s32(fThresh);
-
-        v_lt = mulFracConst<14, 7787, 1000, -BASE*16/116*1000/7787>(ziv);
-
-        v_gt = (((ziv*ziv) >> base_shift) * ziv) >> base_shift;
-        ziv = v_select(mask, v_lt, v_gt);
+        int32_t CV_DECL_ALIGNED(16) v_x[4], v_z[4];
+        v_int32x4 minShift = v_setall_s32(-minABvalue);
+        v_store_aligned(v_x, xiv+minShift);
+        v_store_aligned(v_z, ziv+minShift);
+        xiv = v_int32x4(abToXZ_b[v_x[0]], abToXZ_b[v_x[1]], abToXZ_b[v_x[2]], abToXZ_b[v_x[3]]);
+        ziv = v_int32x4(abToXZ_b[v_z[0]], abToXZ_b[v_z[1]], abToXZ_b[v_z[2]], abToXZ_b[v_z[3]]);
     }
 
     inline void processXYZToRGB(v_int32x4  xiv, v_int32x4  yiv, v_int32x4  ziv,
@@ -1569,8 +1636,9 @@ struct Lab2RGBinteger
         int i = 0;
         if(enablePackedLab)
         {
-            v_float32x4 vldiv  = v_setall_f32(BASE/100.0f);
-            v_float32x4 vadiv  = v_setall_f32(BASE/256.0f);
+            //v_float32x4 vldiv  = v_setall_f32(BASE/100.0f);
+            //v_float32x4 vadiv  = v_setall_f32(BASE/256.0f);
+            v_float32x4 vldiv  = v_setall_f32(256.f/100.0f);
             v_float32x4 vf255  = v_setall_f32(255.f);
             static const int nPixels = 4;
             for(; i <= n*3-3*nPixels; i += 3*nPixels, dst += dcn*nPixels)
@@ -1582,13 +1650,14 @@ struct Lab2RGBinteger
                 */
                 v_float32x4 vl, va, vb;
                 v_load_deinterleave(src + i, vl, va, vb);
-                vl *= vldiv; va *= vadiv; vb *= vadiv;
+                vl *= vldiv; //va *= vadiv; vb *= vadiv;
 
                 v_int32x4 ivl = v_round(vl), iva = v_round(va), ivb = v_round(vb);
                 v_int32x4 ixv, iyv, izv;
                 v_int32x4 i_r, i_g, i_b;
                 v_int32x4 r_vecs, g_vecs, b_vecs;
 
+                //TODO: rewrite this call
                 processLabToXYZ(ivl, iva, ivb, ixv, iyv, izv);
                 processXYZToRGB(ixv, iyv, izv, i_b, i_g, i_r);
                 processGamma(i_b, i_g, i_r, b_vecs, g_vecs, r_vecs);
@@ -1611,12 +1680,8 @@ struct Lab2RGBinteger
 
         for(; i < n*3; i += 3, dst += dcn)
         {
-            int L = saturate_cast<int>(src[i]*BASE/100.0f);
-            int a = saturate_cast<int>(src[i + 1]*BASE/256);
-            int b = saturate_cast<int>(src[i + 2]*BASE/256);
-
             int ro, go, bo;
-            process(L, a, b, ro, go, bo);
+            process(src[i + 0]*255.f/100.f, src[i + 1], src[i + 2], ro, go, bo);
 
             dst[0] = bo/255.f;
             dst[1] = go/255.f;
@@ -1656,20 +1721,20 @@ struct Lab2RGBinteger
                 v_expand(savec0, avecs[0], avecs[1]); v_expand(savec1, avecs[2], avecs[3]);
                 v_expand(sbvec0, bvecs[0], bvecs[1]); v_expand(sbvec1, bvecs[2], bvecs[3]);
 
-                v_int32x4  lv[4], av[4], bv[4];
-                for(int k = 0; k < 4; k++)
-                {
-                    /* L = L*BASE/255; */
-                    lv[k] = mulFracConst<14, 255, BASE, 0>(lvecs[k]);
-                    /* a = (a - 128)*BASE/256; b = (a - 128)*BASE/256; */
-                    av[k] = (avecs[k] - v_setall_s32(128)) << (base_shift - 8);
-                    bv[k] = (bvecs[k] - v_setall_s32(128)) << (base_shift - 8);
-                }
+//                v_int32x4  lv[4], av[4], bv[4];
+//                for(int k = 0; k < 4; k++)
+//                {
+//                    /* L = L*BASE/255; */
+//                    lv[k] = mulFracConst<14, 255, BASE, 0>(lvecs[k]);
+//                    /* a = (a - 128)*BASE/256; b = (a - 128)*BASE/256; */
+//                    av[k] = (avecs[k] - v_setall_s32(128)) << (base_shift - 8);
+//                    bv[k] = (bvecs[k] - v_setall_s32(128)) << (base_shift - 8);
+//                }
 
                 v_int32x4 xiv[4], yiv[4], ziv[4];
                 for(int k = 0; k < 4; k++)
                 {
-                    processLabToXYZ(lv[k], av[k], bv[k], xiv[k], yiv[k], ziv[k]);
+                    processLabToXYZ(lvecs[k], avecs[k], bvecs[k], xiv[k], yiv[k], ziv[k]);
                 }
 
                 v_int32x4 i_r[4], i_g[4], i_b[4];
@@ -1712,13 +1777,7 @@ struct Lab2RGBinteger
         for (; i < n*3; i += 3, dst += dcn)
         {
             int ro, go, bo;
-            //int L = src[i + 0]*BASE/255;
-            //no truncation at division
-            int L = mulFracConst<14, 255, BASE, 0>(src[i + 0]);
-            int a = (src[i + 1] - 128)*BASE/256;
-            int b = (src[i + 2] - 128)*BASE/256;
-
-            process(L, a, b, ro, go, bo);
+            process(src[i + 0], src[i + 1], src[i + 2], ro, go, bo);
 
             dst[0] = saturate_cast<uchar>(bo);
             dst[1] = saturate_cast<uchar>(go);
@@ -1995,8 +2054,69 @@ struct Lab2RGB_f
 
 TEST(ImgProc_Color, LabCheckWorking)
 {
+    //<bits, divisor, multiplier, toAdd>
+//    MulFracConst<14, 9033, 1000, 0> mf;
+
+
+//    mf.calc()
+//    return;
+
+    /*
+    for(int L = 0; L < 256; L++)
+    {
+        int y, ify;
+        int ycheck, ifycheck;
+        static const int BASE = (1 << 14);
+        if( L <= 0.008856f * 903.3f * 255.0f / 100.0f ) //20.39904324
+        {
+            //yy = li / 903.3f;
+            //y = L*100/903.3f;
+            //y = L*BASE*1000/9033/255;
+            MulFracConst<14, 9033*255/5, 200*BASE, 0> mf0;
+            y = (L*mf0.vmul + mf0.vadd)>>mf0.r;
+            ycheck = cvRound((double)L*1000.0/9033.0/255.0*BASE);
+
+            cout << "mf0: vmul " << mf0.vmul << " vadd " << mf0.vadd << " r " << mf0.r << endl;
+
+            //fy = 7.787f * yy + 16.0f / 116.0f;
+            //ify = BASE*16/116 + L*7787*BASE/255/9033;
+
+
+            MulFracConst<14, 255*9033, 7787*BASE, BASE*16/116 +1> mf1;
+            ify = (L*mf1.vmul + mf1.vadd) >> mf1.r;
+            ifycheck = cvRound((double)L*7787.0*BASE/255.0/9033.0 +
+                               BASE*16.0/116.0);
+
+            cout << "mf1: vmul " << mf1.vmul << " vadd " << mf1.vadd << " r " << mf1.r << endl;
+
+            cout << L << ": " << y << " " << ycheck;
+            cout << " " << ify << " " << ifycheck << endl;
+        }
+        else
+        {
+            //fy = (li + 16.0f) / 116.0f;
+            MulFracConst<14, 1479, 5*BASE, 16/116*BASE +1 > mf0;
+            //ify = L/255*100/116*BASE + 16/116*BASE;
+            ify = (L*mf0.vmul + mf0.vadd) >> mf0.r;
+            ifycheck = cvRound((double)L*BASE*100.0/255.0/116.0 +
+                               BASE*16.0/116.0);
+
+            cout << "mf0: vmul " << mf0.vmul << " vadd " << mf0.vadd << " r " << mf0.r << endl;
+
+            //yy = fy * fy * fy;
+            y = ify*ify/BASE*ify/BASE;
+            ycheck = cvRound(ifycheck*ifycheck/BASE*ifycheck/BASE);
+
+            cout << L << ": " << y << " " << ycheck;
+            cout << " " << ify << " " << ifycheck << endl;
+        }
+    }
+
+    return;*/
+
+
     //TODO: make good test
-    return;
+    //return;
 
     //cv::setUseOptimized(false);
 
