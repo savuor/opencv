@@ -255,103 +255,6 @@ static uint LabToYF_b[256*2];
 static const int minABvalue = -8145;
 static int abToXZ_b[LAB_BASE*9/4];
 
-template <uint v>
-struct SignificantBits
-{
-    static const uint bits = SignificantBits<(v >> 1)>::bits + 1;
-};
-
-template <>
-struct SignificantBits<0>
-{
-    static const uint bits = 0;
-};
-
-// v = v/d, d != 2^n, mul >= 0
-template<int w, long long int d, bool round>
-struct FracConst
-{
-static const int r = w + SignificantBits<d>::bits - 1;
-static const int pmod = (1 << r)%d;
-static const int f = (1ll << r)/d;
-static const int vmul = (pmod*2 > d ) ? (f+1) : f;
-static const int vadd = ((round ? 1LL : 0) << (r-1)) + ((pmod*2 > d ) ? 0 : f);
-static inline int calc(int v) { return (v*vmul + vadd) >> r; }
-};
-
-// v = v*mul/d + toAdd, d != 2^n, mul >= 0
-template<int w, long long int d, long long int mul, long long int toAdd>
-struct MulFracConst
-{
-static const long long int r = w + SignificantBits<d>::bits - 1;
-static const long long int pmod = (1ll << r)%d;
-static const long long int f = (1ll << r)/d;
-static const long long int vfp1 = pmod*2 > d ? (f + 1) : f;
-static const long long int adc  = pmod*2 > d ? (1ll << (r - 1)) : f + (1ll << (r - 1));
-static const long long int vmul = (pmod*2 > d ) ? mul*(f+1) : mul*f;
-//static const long long int vadd = ( (toAdd << r) + mul*(1LL << (r-1)) ) + ((pmod*2 > d ) ? 0 : mul*f);
-static const long long int vadd = ( (toAdd << r) + (1LL << (r-1)) ) + ((pmod*2 > d ) ? 0 : f);
-
-static inline int calc(int v) { return (v*vmul + vadd) >> r; }
-static inline v_int32x4 calc(v_int32x4 v)
-{
-    return v;
-}
-
-};
-
-// v = v*mul/d + toAdd, d != 2^n, mul >= 0
-template<int w, long long int d, long long int mul, long long int toAdd>
-static inline int mulFracConst(int v)
-{
-    enum
-    {
-        b = SignificantBits<d>::bits - 1,
-        r = w + b,
-        pmod = (1ll << r)%d,
-        f = (1ll << r)/d,
-        vfp1 = pmod*2 > d ? (f + 1) : f,
-        adc  = pmod*2 > d ? (1ll << (r - 1)) : f + (1ll << (r - 1))
-        //adc  = mul*( pmod*2 > d ? (1ll << (r - 1)) : f + (1ll << (r - 1)) )
-    };
-
-    //v = toAdd + mul*CV_DESCALE((pmod*2 > d) ? v*(f+1) : (v+1)*f, r);
-    long long int vl = v*mul;
-    vl = toAdd + ((vl * vfp1 + adc) >> r);
-    return (int)vl;
-}
-
-// v = v*mul/d + toAdd, d != 2^n, mul >= 0
-template<int w, long long int d, long long int mul, int toAdd>
-static inline v_int32x4 mulFracConst(v_int32x4 v)
-{
-    enum
-    {
-        b = SignificantBits<d>::bits - 1,
-        r = w + b,
-        pmod = (1ll << r)%d,
-        f = (1ll << r)/d
-    };
-    static const long long int vadc = (pmod * 2 > d) ? (1ll << (r - 1)) : (f + (1ll << (r - 1)));
-    static const long long int vfp1 = (pmod * 2 > d) ? (f + 1)*mul : f*mul;
-    v_uint32x4 fp1 = v_setall_u32((unsigned int)vfp1);
-    // v_mul_expand doesn't support signed int32 args
-    v_uint32x4 uv = v_reinterpret_as_u32(v);
-    v_uint64x2 uo0, uo1;
-    v_int64x2 sub0, sub1;
-    v_mul_expand(uv, fp1, uo0, uo1);
-    v_int32x4 vmask = v < v_setzero_s32();
-    v_int32x4 sfp1 = v_reinterpret_as_s32(fp1);
-    v_expand(v_select(vmask, sfp1, v_setzero_s32()), sub0, sub1);
-
-    v_int64x2 v0, v1;
-    v_int64x2 adc = v_setall_s64(vadc), vplus = v_setall_s64(toAdd);
-    v0 = vplus + ((v_reinterpret_as_s64(uo0) - (sub0 << 32) + adc) >> r);
-    v1 = vplus + ((v_reinterpret_as_s64(uo1) - (sub1 << 32) + adc) >> r);
-
-    return v_pack(v0, v1);
-}
-
 #define clip(value) \
     value < 0.0f ? 0.0f : value > 1.0f ? 1.0f : value;
 
@@ -1736,7 +1639,6 @@ struct Lab2RGBinteger
                                                xiv[1], yiv[1], ziv[1],
                                                xiv[2], yiv[2], ziv[2],
                                                xiv[3], yiv[3], ziv[3]);
-
                 /*
                         ro = CV_DESCALE(C0 * x + C1 * y + C2 * z, shift);
                         go = CV_DESCALE(C3 * x + C4 * y + C5 * z, shift);
