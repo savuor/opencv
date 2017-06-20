@@ -290,22 +290,29 @@ static inline float applyInvGamma_gold(float x)
 
 // TODO: up to this
 
+//all constants should be presented through integers to keep bit-exactness
+static const softdouble gammaThreshold    = softdouble(809)/softdouble(20000);    //  0.04045
+static const softdouble gammaInvThreshold = softdouble(7827)/softdouble(2500000); //  0.0031308
+static const softdouble gammaLowScale     = softdouble(323)/softdouble(25);       // 12.92
+static const softdouble gammaPower        = softdouble(12)/softdouble(5);         //  2.4
+static const softdouble gammaXshift       = softdouble(11)/softdouble(200);       // 0.055
+
 static inline softfloat applyGamma(softfloat x)
 {
     //return x <= 0.04045f ? x*(1.f/12.92f) : (float)std::pow((double)(x + 0.055)*(1./1.055), 2.4);
     softdouble xd = x;
-    return (xd <= softdouble(0.04045) ?
-                xd/softdouble(12.92) :
-                pow((xd + softdouble(0.055))/softdouble(1.055), softdouble(2.4)));
+    return (xd <= gammaThreshold ?
+                xd/gammaLowScale :
+                pow((xd + gammaXshift)/(softdouble::one()+gammaXshift), gammaPower));
 }
 
 static inline softfloat applyInvGamma(softfloat x)
 {
     //return x <= 0.0031308 ? x*12.92f : (float)(1.055*std::pow((double)x, 1./2.4) - 0.055);
     softdouble xd = x;
-    return (xd <= softdouble(0.0031308) ?
-                xd*softdouble(12.92) :
-                pow(xd, softdouble::one()/softdouble(2.4))*softdouble(1.055) - softdouble(0.055));
+    return (xd <= gammaInvThreshold ?
+                xd*gammaLowScale :
+                pow(xd, softdouble::one()/gammaPower)*(softdouble::one()+gammaXshift) - gammaXshift);
 }
 
 static void initLabTabs()
@@ -313,8 +320,9 @@ static void initLabTabs()
     static bool initialized = false;
     if(!initialized)
     {
-        static const softfloat lthresh(0.008856f), lscale(7.787f);
-        static const softfloat lbias = softfloat(16.f) / softfloat(116.f);
+        static const softfloat lthresh = softfloat::fromRaw(0x3c1118c2); // 0.008856f
+        static const softfloat lscale  = softfloat::fromRaw(0x40f92f1b); // 7.787f
+        static const softfloat lbias = softfloat(16) / softfloat(116);
         static const softfloat f255(255);
 
         softfloat f[LAB_CBRT_TAB_SIZE+1], g[GAMMA_TAB_SIZE+1], ig[GAMMA_TAB_SIZE+1];
@@ -798,7 +806,7 @@ struct RGB2Lab_f
                 coeffs[j + blueIdx]       = c2;
 
                 CV_Assert( c0 >= 0 && c1 >= 0 && c2 >= 0 &&
-                           c0 + c1 + c2 < softfloat(LabCbrtTabScale)*softfloat(1.5f) );
+                           c0 + c1 + c2 < softfloat((int)LAB_CBRT_TAB_SIZE) );
             }
         }
         else
@@ -1000,9 +1008,8 @@ struct Lab2RGBfloat
                 coeffs[i+blueIdx*3]     = (softfloat(_coeffs[i+6])*softfloat(_whitept[i]));
             }
 
-            lThresh = softfloat(0.008856f) * softfloat(903.3f);
-            fThresh = softfloat(7.787f) * softfloat(0.008856f) +
-                      softfloat(16.0f) / softfloat(116.0f);
+            lThresh = softfloat::fromRaw(0x40fffced); // 0.008856f * 903.3f
+            fThresh = softfloat::fromRaw(0x3e53dbaf); // 7.787f * 0.008856f + 16.0f / 116.0f
         }
         else
         {
@@ -1393,25 +1400,9 @@ struct Lab2RGBinteger
 
         int ifxz[] = {ify + adiv, ify - bdiv};
 
-//        static int minv =  100000000;
-//        static int maxv = -100000000;
-
         for(int k = 0; k < 2; k++)
         {
             int& v = ifxz[k];
-//            if(v < minv) { minv = v; cout << "minv: " << minv << endl; }
-//            if(v > maxv) { maxv = v; cout << "maxv: " << maxv << endl; }
-
-//            if(v <= fThresh)
-//            {
-//                //fxz[k] = (fxz[k] - 16.0f / 116.0f) / 7.787f;
-//                v = v*1000/7787 - BASE*16/116*1000/7787;
-//            }
-//            else
-//            {
-//                //fxz[k] = fxz[k] * fxz[k] * fxz[k];
-//                v = v*v/BASE*v/BASE;
-//            }
             v = abToXZ_b[v-minABvalue];
         }
         x = ifxz[0]; /* y = y */; z = ifxz[1];
@@ -1486,6 +1477,8 @@ struct Lab2RGBinteger
         v_uint16x8 xiv0, xiv1, ziv0, ziv1;
         v_int16x8 vSubA = v_setall_s16(-128*BASE/500 - minABvalue), vSubB = v_setall_s16(128*BASE/200-1 - minABvalue);
 
+        // int ifxz[] = {ify + adiv, ify - bdiv};
+        // ifxz[k] = abToXZ_b[ifxz[k]-minABvalue];
         xiv0 = v_reinterpret_as_u16(v_add_wrap(v_add_wrap(ify0, adiv0), vSubA));
         xiv1 = v_reinterpret_as_u16(v_add_wrap(v_add_wrap(ify1, adiv1), vSubA));
         ziv0 = v_reinterpret_as_u16(v_add_wrap(v_sub_wrap(ify0, bdiv0), vSubB));
@@ -1514,8 +1507,6 @@ struct Lab2RGBinteger
         int i = 0;
         if(enablePackedLab)
         {
-            //v_float32x4 vldiv  = v_setall_f32(BASE/100.0f);
-            //v_float32x4 vadiv  = v_setall_f32(BASE/256.0f);
             v_float32x4 vldiv  = v_setall_f32(256.f/100.0f);
             v_float32x4 vf255  = v_setall_f32(255.f);
             static const int nPixels = 16;
@@ -1530,7 +1521,7 @@ struct Lab2RGBinteger
                 for(int k = 0; k < 4; k++)
                 {
                     v_load_deinterleave(src + i + k*3*4, vl[k], va[k], vb[k]);
-                    vl[k] *= vldiv; //va *= vadiv; vb *= vadiv;
+                    vl[k] *= vldiv;
                 }
 
                 v_int32x4 ivl[4], iva[4], ivb[4];
