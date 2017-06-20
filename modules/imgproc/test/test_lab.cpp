@@ -251,7 +251,7 @@ enum
 };
 static int16_t RGB2LabLUT_s16[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3*8];
 static int16_t trilinearLUT[TRILINEAR_BASE*TRILINEAR_BASE*TRILINEAR_BASE*8];
-static int LabToYF_b[256*2];
+static uint LabToYF_b[256*2];
 static const int minABvalue = -8145;
 static int abToXZ_b[LAB_BASE*9/4];
 
@@ -552,8 +552,8 @@ static void initLabTabs()
                 y = cvRound(fy*fy*fy/softfloat(BASE*BASE));
             }
 
-            LabToYF_b[i*2  ] = y;
-            LabToYF_b[i*2+1] = ify;
+            LabToYF_b[i*2  ] = y;   // 2260 <= y <= BASE
+            LabToYF_b[i*2+1] = ify; // 0 <= ify <= BASE
         }
 
         //Lookup table for a,b to x,z conversion
@@ -571,7 +571,7 @@ static void initLabTabs()
                 //fxz[k] = fxz[k] * fxz[k] * fxz[k];
                 v = i*i/BASE*i/BASE;
             }
-            abToXZ_b[i-minABvalue] = v;
+            abToXZ_b[i-minABvalue] = v; // -1335 <= v <= 88231
         }
 
         if(enableRGB2LabInterpolation)
@@ -1531,64 +1531,76 @@ struct Lab2RGBinteger
     }
 
     // L, a, b shoule be in their natural range
-    inline void processLabToXYZ(v_uint8x16  lv, v_uint8x16  av, v_uint8x16  bv,
-                                v_int32x4& xiv0, v_int32x4& yiv0, v_int32x4& ziv0,
-                                v_int32x4& xiv1, v_int32x4& yiv1, v_int32x4& ziv1,
-                                v_int32x4& xiv2, v_int32x4& yiv2, v_int32x4& ziv2,
-                                v_int32x4& xiv3, v_int32x4& yiv3, v_int32x4& ziv3) const
-
-
-//    inline void processLabToXYZ(v_int32x4  lv, v_int32x4  av, v_int32x4  bv,
-//                                v_int32x4& xiv, v_int32x4& yiv, v_int32x4& ziv) const
+    inline void processLabToXYZ(v_uint8x16   lv, v_uint8x16   av, v_uint8x16   bv,
+                                v_int32x4& xiv00, v_int32x4& yiv00, v_int32x4& ziv00,
+                                v_int32x4& xiv01, v_int32x4& yiv01, v_int32x4& ziv01,
+                                v_int32x4& xiv10, v_int32x4& yiv10, v_int32x4& ziv10,
+                                v_int32x4& xiv11, v_int32x4& yiv11, v_int32x4& ziv11) const
     {
         v_uint16x8 lv0, lv1;
         v_expand(lv, lv0, lv1);
         // Load Y and IFY values from lookup-table
-        uint16_t CV_DECL_ALIGNED(16) v_lv0[4], v_lv1[4];
-        v_store_aligned(v_lv0, (lv0 << 1)); v_store_aligned(v_lv1, (lv1 << 1));
-        v_int32x4 ify0, ify1, ify2, ify3;
         // y = LabToYF_b[L_value*2], ify = LabToYF_b[L_value*2 + 1]
-        yiv0 = v_int32x4(LabToYF_b[v_lv0[0]  ], LabToYF_b[v_lv0[1]  ], LabToYF_b[v_lv0[2]  ], LabToYF_b[v_lv0[3]  ]);
-        yiv1 = v_int32x4(LabToYF_b[v_lv1[0]  ], LabToYF_b[v_lv1[1]  ], LabToYF_b[v_lv1[2]  ], LabToYF_b[v_lv1[3]  ]);
-        yiv2 = v_int32x4(LabToYF_b[v_lv2[0]  ], LabToYF_b[v_lv2[1]  ], LabToYF_b[v_lv2[2]  ], LabToYF_b[v_lv2[3]  ]);
-        yiv3 = v_int32x4(LabToYF_b[v_lv3[0]  ], LabToYF_b[v_lv3[1]  ], LabToYF_b[v_lv3[2]  ], LabToYF_b[v_lv3[3]  ]);
+        // LabToYF_b[i*2  ] = y;   // 2260 <= y <= BASE
+        // LabToYF_b[i*2+1] = ify; // 0 <= ify <= BASE
+        uint16_t CV_DECL_ALIGNED(16) v_lv0[8], v_lv1[8];
+        v_store_aligned(v_lv0, (lv0 << 1)); v_store_aligned(v_lv1, (lv1 << 1));
+        v_int16x8 ify0, ify1;
 
-        ify0 = v_int32x4(LabToYF_b[v_lv0[0]+1], LabToYF_b[v_lv0[1]+1], LabToYF_b[v_lv0[2]+1], LabToYF_b[v_lv0[3]+1]);
-        ify1 = v_int32x4(LabToYF_b[v_lv1[0]+1], LabToYF_b[v_lv1[1]+1], LabToYF_b[v_lv1[2]+1], LabToYF_b[v_lv1[3]+1]);
-        ify2 = v_int32x4(LabToYF_b[v_lv2[0]+1], LabToYF_b[v_lv2[1]+1], LabToYF_b[v_lv2[2]+1], LabToYF_b[v_lv2[3]+1]);
-        ify3 = v_int32x4(LabToYF_b[v_lv3[0]+1], LabToYF_b[v_lv3[1]+1], LabToYF_b[v_lv3[2]+1], LabToYF_b[v_lv3[3]+1]);
+        yiv00 = v_int32x4(LabToYF_b[v_lv0[0]  ], LabToYF_b[v_lv0[1]  ], LabToYF_b[v_lv0[2]  ], LabToYF_b[v_lv0[3]  ]);
+        yiv01 = v_int32x4(LabToYF_b[v_lv0[4]  ], LabToYF_b[v_lv0[5]  ], LabToYF_b[v_lv0[6]  ], LabToYF_b[v_lv0[7]  ]);
+        yiv10 = v_int32x4(LabToYF_b[v_lv1[0]  ], LabToYF_b[v_lv1[1]  ], LabToYF_b[v_lv1[2]  ], LabToYF_b[v_lv1[3]  ]);
+        yiv11 = v_int32x4(LabToYF_b[v_lv1[4]  ], LabToYF_b[v_lv1[5]  ], LabToYF_b[v_lv1[6]  ], LabToYF_b[v_lv1[7]  ]);
+
+        ify0 = v_int16x8(LabToYF_b[v_lv0[0]+1], LabToYF_b[v_lv0[1]+1], LabToYF_b[v_lv0[2]+1], LabToYF_b[v_lv0[3]+1],
+                         LabToYF_b[v_lv0[4]+1], LabToYF_b[v_lv0[5]+1], LabToYF_b[v_lv0[6]+1], LabToYF_b[v_lv0[7]+1]);
+        ify1 = v_int16x8(LabToYF_b[v_lv1[0]+1], LabToYF_b[v_lv1[1]+1], LabToYF_b[v_lv1[2]+1], LabToYF_b[v_lv1[3]+1],
+                         LabToYF_b[v_lv1[4]+1], LabToYF_b[v_lv1[5]+1], LabToYF_b[v_lv1[6]+1], LabToYF_b[v_lv1[7]+1]);
 
         v_int16x8 adiv0, adiv1, bdiv0, bdiv1;
         v_uint16x8 av0, av1, bv0, bv1;
         v_expand(av, av0, av1); v_expand(bv, bv0, bv1);
         //adiv = aa*BASE/500 - 128*BASE/500, bdiv = bb*BASE/200 - 128*BASE/200;
         //approximations with reasonable precision
-        v_uint16x8 mulA = v_setall_u16(53687), subA = v_setall_u16(128*BASE/500);
+        v_uint16x8 mulA = v_setall_u16(53687);
         v_uint32x4 ma00, ma01, ma10, ma11;
         v_uint32x4 addA = v_setall_u32(1 << 7);
         v_mul_expand((av0 + (av0 << 2)), mulA, ma00, ma01);
         v_mul_expand((av1 + (av1 << 2)), mulA, ma10, ma11);
-        adiv0 = v_pack(((ma00 + addA) >> 13), ((ma01 + addA) >> 13)) - subA;
-        adiv1 = v_pack(((ma10 + addA) >> 13), ((ma11 + addA) >> 13)) - subA;
-        //TODO: finish this
+        adiv0 = v_reinterpret_as_s16(v_pack(((ma00 + addA) >> 13), ((ma01 + addA) >> 13)));
+        adiv1 = v_reinterpret_as_s16(v_pack(((ma10 + addA) >> 13), ((ma11 + addA) >> 13)));
 
-        v_int32x4 adiv, bdiv;
-        //adiv = aa*BASE/500 - 128*BASE/500, bdiv = bb*BASE/200 - 128*BASE/200;
+        v_uint16x8 mulB = v_setall_u16(41943);
+        v_uint32x4 mb00, mb01, mb10, mb11;
+        v_uint32x4 addB = v_setall_u32(1 << 4);
+        v_mul_expand(bv0, mulB, mb00, mb01);
+        v_mul_expand(bv1, mulB, mb10, mb11);
+        bdiv0 = v_reinterpret_as_s16(v_pack((mb00 + addB) >> 9, (mb01 + addB) >> 9));
+        bdiv1 = v_reinterpret_as_s16(v_pack((mb10 + addB) >> 9, (mb11 + addB) >> 9));
 
-        //approximations with reasonable precision
-        adiv = (((av + (av << 2))*v_setall_s32(53687) + v_setall_s32(1 << 7)) >> 13) - v_setall_s32(128*BASE/500);
-        bdiv = ((bv*v_setall_s32(41943) + v_setall_s32(1 << 4)) >> 9) - v_setall_s32(128*BASE/200 - 1);
-
+        // 0 <= adiv <= 8356, 0 <= bdiv <= 20890
         /* x = ifxz[0]; y = y; z = ifxz[1]; */
-        xiv = ify + adiv;
-        ziv = ify - bdiv;
+        v_uint16x8 xiv0, xiv1, ziv0, ziv1;
+        v_int16x8 vSubA = v_setall_s16(-128*BASE/500-minABvalue), vSubB = v_setall_s16(128*BASE/200 - 1 - minABvalue);
 
-        int32_t CV_DECL_ALIGNED(16) v_x[4], v_z[4];
-        v_int32x4 minShift = v_setall_s32(-minABvalue);
-        v_store_aligned(v_x, xiv+minShift);
-        v_store_aligned(v_z, ziv+minShift);
-        xiv = v_int32x4(abToXZ_b[v_x[0]], abToXZ_b[v_x[1]], abToXZ_b[v_x[2]], abToXZ_b[v_x[3]]);
-        ziv = v_int32x4(abToXZ_b[v_z[0]], abToXZ_b[v_z[1]], abToXZ_b[v_z[2]], abToXZ_b[v_z[3]]);
+        xiv0 = v_reinterpret_as_u16(v_add_wrap(v_add_wrap(ify0, adiv0), vSubA));
+        xiv1 = v_reinterpret_as_u16(v_add_wrap(v_add_wrap(ify1, adiv1), vSubA));
+        ziv0 = v_reinterpret_as_u16(v_add_wrap(v_sub_wrap(ify0, bdiv0), vSubB));
+        ziv1 = v_reinterpret_as_u16(v_add_wrap(v_sub_wrap(ify1, bdiv1), vSubB));
+
+        uint16_t CV_DECL_ALIGNED(16) v_x0[8], v_x1[8], v_z0[8], v_z1[8];
+        v_store_aligned(v_x0, xiv0 ); v_store_aligned(v_x1, xiv1 );
+        v_store_aligned(v_z0, ziv0 ); v_store_aligned(v_z1, ziv1 );
+
+        xiv00 = v_int32x4(abToXZ_b[v_x0[0]], abToXZ_b[v_x0[1]], abToXZ_b[v_x0[2]], abToXZ_b[v_x0[3]]);
+        xiv01 = v_int32x4(abToXZ_b[v_x0[4]], abToXZ_b[v_x0[5]], abToXZ_b[v_x0[6]], abToXZ_b[v_x0[7]]);
+        xiv10 = v_int32x4(abToXZ_b[v_x1[0]], abToXZ_b[v_x1[1]], abToXZ_b[v_x1[2]], abToXZ_b[v_x1[3]]);
+        xiv11 = v_int32x4(abToXZ_b[v_x1[4]], abToXZ_b[v_x1[5]], abToXZ_b[v_x1[6]], abToXZ_b[v_x1[7]]);
+        ziv00 = v_int32x4(abToXZ_b[v_z0[0]], abToXZ_b[v_z0[1]], abToXZ_b[v_z0[2]], abToXZ_b[v_z0[3]]);
+        ziv01 = v_int32x4(abToXZ_b[v_z0[4]], abToXZ_b[v_z0[5]], abToXZ_b[v_z0[6]], abToXZ_b[v_z0[7]]);
+        ziv10 = v_int32x4(abToXZ_b[v_z1[0]], abToXZ_b[v_z1[1]], abToXZ_b[v_z1[2]], abToXZ_b[v_z1[3]]);
+        ziv11 = v_int32x4(abToXZ_b[v_z1[4]], abToXZ_b[v_z1[5]], abToXZ_b[v_z1[6]], abToXZ_b[v_z1[7]]);
+        // abToXZ_b[i-minABvalue] = v; // -1335 <= v <= 88231
     }
 
     inline void processXYZToRGB(v_int32x4  xiv, v_int32x4  yiv, v_int32x4  ziv,
@@ -1658,7 +1670,8 @@ struct Lab2RGBinteger
                 v_int32x4 r_vecs, g_vecs, b_vecs;
 
                 //TODO: rewrite this call
-                processLabToXYZ(ivl, iva, ivb, ixv, iyv, izv);
+                //processLabToXYZ(ivl, iva, ivb, ixv, iyv, izv);
+
                 processXYZToRGB(ixv, iyv, izv, i_b, i_g, i_r);
                 processGamma(i_b, i_g, i_r, b_vecs, g_vecs, r_vecs);
 
@@ -1731,11 +1744,16 @@ struct Lab2RGBinteger
 //                    bv[k] = (bvecs[k] - v_setall_s32(128)) << (base_shift - 8);
 //                }
 
+                //TODO: rewrite this call
                 v_int32x4 xiv[4], yiv[4], ziv[4];
-                for(int k = 0; k < 4; k++)
-                {
-                    processLabToXYZ(lvecs[k], avecs[k], bvecs[k], xiv[k], yiv[k], ziv[k]);
-                }
+                processLabToXYZ(u8l, u8a, u8b, xiv[0], yiv[0], ziv[0],
+                                               xiv[1], yiv[1], ziv[1],
+                                               xiv[2], yiv[2], ziv[2],
+                                               xiv[3], yiv[3], ziv[3]);
+                //for(int k = 0; k < 4; k++)
+                //{
+                    //processLabToXYZ(lvecs[k], avecs[k], bvecs[k], xiv[k], yiv[k], ziv[k]);
+                //}
 
                 v_int32x4 i_r[4], i_g[4], i_b[4];
                 for(int k = 0; k < 4; k++)
