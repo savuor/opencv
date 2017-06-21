@@ -251,7 +251,7 @@ enum
 };
 static int16_t RGB2LabLUT_s16[LAB_LUT_DIM*LAB_LUT_DIM*LAB_LUT_DIM*3*8];
 static int16_t trilinearLUT[TRILINEAR_BASE*TRILINEAR_BASE*TRILINEAR_BASE*8];
-static uint LabToYF_b[256*2];
+static ushort LabToYF_b[256*2];
 static const int minABvalue = -8145;
 static int abToXZ_b[LAB_BASE*9/4];
 
@@ -463,8 +463,8 @@ static void initLabTabs()
                 y = cvRound(fy*fy*fy/softfloat(BASE*BASE));
             }
 
-            LabToYF_b[i*2  ] = y;   // 2260 <= y <= BASE
-            LabToYF_b[i*2+1] = ify; // 0 <= ify <= BASE
+            LabToYF_b[i*2  ] = (ushort)y;   // 2260 <= y <= BASE
+            LabToYF_b[i*2+1] = (ushort)ify; // 0 <= ify <= BASE
         }
 
         //Lookup table for a,b to x,z conversion
@@ -603,9 +603,9 @@ static void initLabTabs()
                         #define FILL(_p, _q, _r) \
                         do {\
                             int idxold = 0;\
-                            idxold += min(p+(_p), (int)LAB_LUT_DIM)*3;\
-                            idxold += min(q+(_q), (int)LAB_LUT_DIM)*LAB_LUT_DIM*3;\
-                            idxold += min(r+(_r), (int)LAB_LUT_DIM)*LAB_LUT_DIM*LAB_LUT_DIM*3;\
+                            idxold += min(p+(_p), (int)(LAB_LUT_DIM-1))*3;\
+                            idxold += min(q+(_q), (int)(LAB_LUT_DIM-1))*LAB_LUT_DIM*3;\
+                            idxold += min(r+(_r), (int)(LAB_LUT_DIM-1))*LAB_LUT_DIM*LAB_LUT_DIM*3;\
                             int idxnew = p*3*8 + q*LAB_LUT_DIM*3*8 + r*LAB_LUT_DIM*LAB_LUT_DIM*3*8+4*(_p)+2*(_q)+(_r);\
                             RGB2LabLUT_s16[idxnew]    = RGB2Labprev[idxold];\
                             RGB2LabLUT_s16[idxnew+8]  = RGB2Labprev[idxold+1];\
@@ -1595,7 +1595,7 @@ struct Lab2RGBinteger
         for(; i < n*3; i += 3, dst += dcn)
         {
             int ro, go, bo;
-            process(src[i + 0]*255.f/100.f, src[i + 1], src[i + 2], ro, go, bo);
+            process((uchar)(src[i + 0]*255.f/100.f), (uchar)src[i + 1], (uchar)src[i + 2], ro, go, bo);
 
             dst[0] = bo/255.f;
             dst[1] = go/255.f;
