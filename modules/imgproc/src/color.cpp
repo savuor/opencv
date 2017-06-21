@@ -5820,7 +5820,7 @@ static float LabCbrtTab[LAB_CBRT_TAB_SIZE*4];
 static const float LabCbrtTabScale = softfloat(LAB_CBRT_TAB_SIZE*2)/softfloat(3);
 
 static float sRGBGammaTab[GAMMA_TAB_SIZE*4], sRGBInvGammaTab[GAMMA_TAB_SIZE*4];
-static const float GammaTabScale = (float)GAMMA_TAB_SIZE;
+static const float GammaTabScale((int)GAMMA_TAB_SIZE);
 
 static ushort sRGBGammaTab_b[256], linearGammaTab_b[256];
 enum { inv_gamma_shift = 12, INV_GAMMA_TAB_SIZE = (1 << inv_gamma_shift) };
@@ -5834,89 +5834,41 @@ static ushort LabCbrtTab_b[LAB_CBRT_TAB_SIZE_B];
 
 static const bool enableBitExactness = true;
 static const bool enablePackedLab = true;
-
-template <uint v>
-struct SignificantBits
+enum
 {
-    static const uint bits = SignificantBits<(v >> 1)>::bits + 1;
+    lab_base_shift = 14,
+    LAB_BASE = (1 << lab_base_shift),
 };
-
-template <>
-struct SignificantBits<0>
-{
-    static const uint bits = 0;
-};
-
-// v = v*mul/d + toAdd, d != 2^n, mul >= 0
-template<int w, long long int d, long long int mul, long long int toAdd>
-static inline int mulFracConst(int v)
-{
-    enum
-    {
-        b = SignificantBits<d>::bits - 1,
-        r = w + b,
-        pmod = (1ll << r)%d,
-        f = (1ll << r)/d,
-        vfp1 = pmod*2 > d ? (f + 1) : f,
-        adc  = pmod*2 > d ? (1ll << (r - 1)) : f + (1ll << (r - 1))
-    };
-
-    //v = toAdd + mul*CV_DESCALE((pmod*2 > d) ? v*(f+1) : (v+1)*f, r);
-    long long int vl = v*mul;
-    vl = toAdd + ((vl * vfp1 + adc) >> r);
-    return (int)vl;
-}
-
-// v = v*mul/d + toAdd, d != 2^n, mul >= 0
-template<int w, long long int d, long long int mul, int toAdd>
-static inline v_int32x4 mulFracConst(v_int32x4 v)
-{
-    enum
-    {
-        b = SignificantBits<d>::bits - 1,
-        r = w + b,
-        pmod = (1ll << r)%d,
-        f = (1ll << r)/d
-    };
-    static const long long int vadc = (pmod * 2 > d) ? (1ll << (r - 1)) : (f + (1ll << (r - 1)));
-    static const long long int vfp1 = (pmod * 2 > d) ? (f + 1)*mul : f*mul;
-    v_uint32x4 fp1 = v_setall_u32((unsigned int)vfp1);
-    // v_mul_expand doesn't support signed int32 args
-    v_uint32x4 uv = v_reinterpret_as_u32(v);
-    v_uint64x2 uo0, uo1;
-    v_int64x2 sub0, sub1;
-    v_mul_expand(uv, fp1, uo0, uo1);
-    v_int32x4 vmask = v < v_setzero_s32();
-    v_int32x4 sfp1 = v_reinterpret_as_s32(fp1);
-    v_expand(v_select(vmask, sfp1, v_setzero_s32()), sub0, sub1);
-
-    v_int64x2 v0, v1;
-    v_int64x2 adc = v_setall_s64(vadc), vplus = v_setall_s64(toAdd);
-    v0 = vplus + ((v_reinterpret_as_s64(uo0) - (sub0 << 32) + adc) >> r);
-    v1 = vplus + ((v_reinterpret_as_s64(uo1) - (sub1 << 32) + adc) >> r);
-
-    return v_pack(v0, v1);
-}
+static uint LabToYF_b[256*2];
+static const int minABvalue = -8145;
+static int abToXZ_b[LAB_BASE*9/4];
 
 #define clip(value) \
     value < 0.0f ? 0.0f : value > 1.0f ? 1.0f : value;
+
+//all constants should be presented through integers to keep bit-exactness
+static const softdouble gammaThreshold    = softdouble(809)/softdouble(20000);    //  0.04045
+static const softdouble gammaInvThreshold = softdouble(7827)/softdouble(2500000); //  0.0031308
+static const softdouble gammaLowScale     = softdouble(323)/softdouble(25);       // 12.92
+static const softdouble gammaPower        = softdouble(12)/softdouble(5);         //  2.4
+static const softdouble gammaXshift       = softdouble(11)/softdouble(200);       // 0.055
 
 static inline softfloat applyGamma(softfloat x)
 {
     //return x <= 0.04045f ? x*(1.f/12.92f) : (float)std::pow((double)(x + 0.055)*(1./1.055), 2.4);
     softdouble xd = x;
-    return (xd <= softdouble(0.04045) ?
-                xd/softdouble(12.92) :
-                pow((xd + softdouble(0.055))/softdouble(1.055), softdouble(2.4)));
+    return (xd <= gammaThreshold ?
+                xd/gammaLowScale :
+                pow((xd + gammaXshift)/(softdouble::one()+gammaXshift), gammaPower));
 }
 
 static inline softfloat applyInvGamma(softfloat x)
 {
     //return x <= 0.0031308 ? x*12.92f : (float)(1.055*std::pow((double)x, 1./2.4) - 0.055);
     softdouble xd = x;
-    return (xd <= softdouble(0.0031308) ?
-                xd*softdouble(12.92) :
-                pow(xd, softdouble::one()/softdouble(2.4))*softdouble(1.055) - softdouble(0.055));
+    return (xd <= gammaInvThreshold ?
+                xd*gammaLowScale :
+                pow(xd, softdouble::one()/gammaPower)*(softdouble::one()+gammaXshift) - gammaXshift);
 }
 
 static void initLabTabs()
@@ -5924,8 +5876,9 @@ static void initLabTabs()
     static bool initialized = false;
     if(!initialized)
     {
-        static const softfloat lthresh(0.008856f), lscale(7.787f);
-        static const softfloat lbias = softfloat(16.f) / softfloat(116.f);
+        static const softfloat lthresh = softfloat::fromRaw(0x3c1118c2); // 0.008856f
+        static const softfloat lscale  = softfloat::fromRaw(0x40f92f1b); // 7.787f
+        static const softfloat lbias = softfloat(16) / softfloat(116);
         static const softfloat f255(255);
 
         softfloat f[LAB_CBRT_TAB_SIZE+1], g[GAMMA_TAB_SIZE+1], ig[GAMMA_TAB_SIZE+1];
@@ -5969,6 +5922,52 @@ static void initLabTabs()
         {
             softfloat x = cbTabScale*softfloat(i);
             LabCbrtTab_b[i] = (ushort)(cvRound(lshift2 * (x < lthresh ? mulAdd(x, lscale, lbias) : cbrt(x))));
+        }
+
+        //Lookup table for L to y and ify calculations
+        static const int BASE = (1 << 14);
+        for(i = 0; i < 256; i++)
+        {
+            int y, ify;
+            //0.008856 * 903.3 * 255.0 / 100.0 == 20.39904324
+            if( i <= 20)
+            {
+                //yy = li / 903.3f;
+                //y = L*100/903.3f;
+                y = cvRound(softfloat(i*BASE*1000)/softfloat(9033*255));
+                //fy = 7.787f * yy + 16.0f / 116.0f;
+                ify = cvRound(softfloat(BASE)*(softfloat(16)/softfloat(116) + softfloat(i*7787)/softfloat(255*9033)));
+            }
+            else
+            {
+                //fy = (li + 16.0f) / 116.0f;
+                softfloat fy = (softfloat(i*100*BASE)/softfloat(255*116) +
+                                softfloat(16*BASE)/softfloat(116));
+                ify = cvRound(fy);
+                //yy = fy * fy * fy;
+                y = cvRound(fy*fy*fy/softfloat(BASE*BASE));
+            }
+
+            LabToYF_b[i*2  ] = y;   // 2260 <= y <= BASE
+            LabToYF_b[i*2+1] = ify; // 0 <= ify <= BASE
+        }
+
+        //Lookup table for a,b to x,z conversion
+        for(i = minABvalue; i < LAB_BASE*9/4+minABvalue; i++)
+        {
+            int v;
+            //(7.787f * 0.008856f + 16.0f / 116.0f)*BASE = 3389.730
+            if(i <= 3390)
+            {
+                //fxz[k] = (fxz[k] - 16.0f / 116.0f) / 7.787f;
+                v = i*1000/7787 - BASE*16/116*1000/7787;
+            }
+            else
+            {
+                //fxz[k] = fxz[k] * fxz[k] * fxz[k];
+                v = i*i/BASE*i/BASE;
+            }
+            abToXZ_b[i-minABvalue] = v; // -1335 <= v <= 88231
         }
 
         initialized = true;
@@ -6070,7 +6069,7 @@ struct RGB2Lab_f
             coeffs[j + blueIdx]       = c2;
 
             CV_Assert( c0 >= 0 && c1 >= 0 && c2 >= 0 &&
-                       c0 + c1 + c2 < softfloat(LabCbrtTabScale)*softfloat(1.5f) );
+                       c0 + c1 + c2 < softfloat((int)LAB_CBRT_TAB_SIZE) );
         }
     }
 
@@ -6139,14 +6138,14 @@ struct Lab2RGBfloat
 
         for( int i = 0; i < 3; i++ )
         {
-            coeffs[i+(blueIdx^2)*3] = softfloat(_coeffs[i]  )*softfloat(_whitept[i]);
-            coeffs[i+3]             = softfloat(_coeffs[i+3])*softfloat(_whitept[i]);
-            coeffs[i+blueIdx*3]     = softfloat(_coeffs[i+6])*softfloat(_whitept[i]);
+            coeffs[i+(blueIdx^2)*3] = (softfloat(_coeffs[i]  )*softfloat(_whitept[i]));
+            coeffs[i+3]             = (softfloat(_coeffs[i+3])*softfloat(_whitept[i]));
+            coeffs[i+blueIdx*3]     = (softfloat(_coeffs[i+6])*softfloat(_whitept[i]));
         }
 
-        lThresh = softfloat(0.008856f) * softfloat(903.3f);
-        fThresh = softfloat(7.787f) * softfloat(0.008856f) +
-                  softfloat(16.0f) / softfloat(116.0f);
+        lThresh = softfloat::fromRaw(0x40fffced); // 0.008856f * 903.3f
+        fThresh = softfloat::fromRaw(0x3e53dbaf); // 7.787f * 0.008856f + 16.0f / 116.0f
+
         #if CV_SSE2
         haveSIMD = checkHardwareSupport(CV_CPU_SSE2);
         #endif
@@ -6401,58 +6400,33 @@ struct Lab2RGBinteger
         static const softfloat lshift(1 << lab_shift);
         for(int i = 0; i < 3; i++)
         {
-            coeffs[i+(blueIdx)*3]   = cvRound((lshift*softfloat(_coeffs[i  ]))*softfloat(_whitept[i]));
-            coeffs[i+3]             = cvRound((lshift*softfloat(_coeffs[i+3]))*softfloat(_whitept[i]));
-            coeffs[i+(blueIdx^2)*3] = cvRound((lshift*softfloat(_coeffs[i+6]))*softfloat(_whitept[i]));
+            coeffs[i+(blueIdx)*3]   = cvRound(lshift*softfloat(_coeffs[i  ])*softfloat(_whitept[i]));
+            coeffs[i+3]             = cvRound(lshift*softfloat(_coeffs[i+3])*softfloat(_whitept[i]));
+            coeffs[i+(blueIdx^2)*3] = cvRound(lshift*softfloat(_coeffs[i+6])*softfloat(_whitept[i]));
         }
 
         tab = srgb ? sRGBInvGammaTab_b : linearInvGammaTab_b;
     }
 
-    // L, a, b should be in [-BASE; +BASE]
-    inline void process(const int L, const int a, const int b, int& ro, int& go, int& bo) const
+    // L, a, b should be in their natural range
+    inline void process(const uchar LL, const uchar aa, const uchar bb, int& ro, int& go, int& bo) const
     {
         int x, y, z;
-
         int ify;
-        if(L <= lThresh)
-        {
-            //yy = li / 903.3f;
-            //y = L*100/903.3f;
-            y = mulFracConst<14, 9033, 1000, 0>(L);
 
-            //fy = 7.787f * yy + 16.0f / 116.0f;
-            ify = base16_116 + L*7787/9033;
-        }
-        else
-        {
-            //fy = (li + 16.0f) / 116.0f;
-            ify = L*100/116 + base16_116;
-
-            //yy = fy * fy * fy;
-            y = ify*ify/BASE*ify/BASE;
-        }
+        y   = LabToYF_b[LL*2  ];
+        ify = LabToYF_b[LL*2+1];
 
         //float fxz[] = { ai / 500.0f + fy, fy - bi / 200.0f };
         int adiv, bdiv;
-        //adiv = a*256/500, bdiv = b*256/200;
-        adiv = mulFracConst<24, 500, 256, 0>(a);
-        bdiv = mulFracConst<24, 200, 256, 0>(b);
+        adiv = aa*BASE/500 - 128*BASE/500, bdiv = bb*BASE/200 - 128*BASE/200;
 
         int ifxz[] = {ify + adiv, ify - bdiv};
+
         for(int k = 0; k < 2; k++)
         {
             int& v = ifxz[k];
-            if(v <= fThresh)
-            {
-                //fxz[k] = (fxz[k] - 16.0f / 116.0f) / 7.787f;
-                v = v*1000/7787 - BASE*16/116*1000/7787;
-            }
-            else
-            {
-                //fxz[k] = fxz[k] * fxz[k] * fxz[k];
-                v = v*v/BASE*v/BASE;
-            }
+            v = abToXZ_b[v-minABvalue];
         }
         x = ifxz[0]; /* y = y */; z = ifxz[1];
 
@@ -6473,109 +6447,79 @@ struct Lab2RGBinteger
         bo = tab[bo];
     }
 
-    // L, a, b should be in [-BASE; +BASE]
-    inline void processLabToXYZ(v_int32x4  liv, v_int32x4  aiv, v_int32x4  biv,
-                                v_int32x4& xiv, v_int32x4& yiv, v_int32x4& ziv) const
+    // L, a, b shoule be in their natural range
+    inline void processLabToXYZ(v_uint8x16   lv, v_uint8x16   av, v_uint8x16   bv,
+                                v_int32x4& xiv00, v_int32x4& yiv00, v_int32x4& ziv00,
+                                v_int32x4& xiv01, v_int32x4& yiv01, v_int32x4& ziv01,
+                                v_int32x4& xiv10, v_int32x4& yiv10, v_int32x4& ziv10,
+                                v_int32x4& xiv11, v_int32x4& yiv11, v_int32x4& ziv11) const
     {
-        v_int32x4 ify;
-        v_int32x4 y_lt, y_gt;
-        v_int32x4 ify_lt, ify_gt;
+        v_uint16x8 lv0, lv1;
+        v_expand(lv, lv0, lv1);
+        // Load Y and IFY values from lookup-table
+        // y = LabToYF_b[L_value*2], ify = LabToYF_b[L_value*2 + 1]
+        // LabToYF_b[i*2  ] = y;   // 2260 <= y <= BASE
+        // LabToYF_b[i*2+1] = ify; // 0 <= ify <= BASE
+        uint16_t CV_DECL_ALIGNED(16) v_lv0[8], v_lv1[8];
+        v_store_aligned(v_lv0, (lv0 << 1)); v_store_aligned(v_lv1, (lv1 << 1));
+        v_int16x8 ify0, ify1;
 
-        // Less-than part
-        /* y = L*100/903.3f; // == mulFracConst<14, 9033, 1000, 0>(L); */
-        y_lt = mulFracConst<14, 9033, 1000, 0>(liv);
+        yiv00 = v_int32x4(LabToYF_b[v_lv0[0]  ], LabToYF_b[v_lv0[1]  ], LabToYF_b[v_lv0[2]  ], LabToYF_b[v_lv0[3]  ]);
+        yiv01 = v_int32x4(LabToYF_b[v_lv0[4]  ], LabToYF_b[v_lv0[5]  ], LabToYF_b[v_lv0[6]  ], LabToYF_b[v_lv0[7]  ]);
+        yiv10 = v_int32x4(LabToYF_b[v_lv1[0]  ], LabToYF_b[v_lv1[1]  ], LabToYF_b[v_lv1[2]  ], LabToYF_b[v_lv1[3]  ]);
+        yiv11 = v_int32x4(LabToYF_b[v_lv1[4]  ], LabToYF_b[v_lv1[5]  ], LabToYF_b[v_lv1[6]  ], LabToYF_b[v_lv1[7]  ]);
 
-        /* //fy = 7.787f * yy + 16.0f / 116.0f;
-            ify = mulFracConst<14, 1000, 7783, base16_116>(y);
-            ify = L*7783/9033 + base16_116; */
-        ify_lt = mulFracConst<14, 9033, 7783, base16_116>(liv);
+        ify0 = v_int16x8(LabToYF_b[v_lv0[0]+1], LabToYF_b[v_lv0[1]+1], LabToYF_b[v_lv0[2]+1], LabToYF_b[v_lv0[3]+1],
+                         LabToYF_b[v_lv0[4]+1], LabToYF_b[v_lv0[5]+1], LabToYF_b[v_lv0[6]+1], LabToYF_b[v_lv0[7]+1]);
+        ify1 = v_int16x8(LabToYF_b[v_lv1[0]+1], LabToYF_b[v_lv1[1]+1], LabToYF_b[v_lv1[2]+1], LabToYF_b[v_lv1[3]+1],
+                         LabToYF_b[v_lv1[4]+1], LabToYF_b[v_lv1[5]+1], LabToYF_b[v_lv1[6]+1], LabToYF_b[v_lv1[7]+1]);
 
-        // Greater-than part
-        /* ify = L*100/116 + base16_116; */
-        ify_gt = mulFracConst<20, 116, 100, base16_116>(liv);
+        v_int16x8 adiv0, adiv1, bdiv0, bdiv1;
+        v_uint16x8 av0, av1, bv0, bv1;
+        v_expand(av, av0, av1); v_expand(bv, bv0, bv1);
+        //adiv = aa*BASE/500 - 128*BASE/500, bdiv = bb*BASE/200 - 128*BASE/200;
+        //approximations with reasonable precision
+        v_uint16x8 mulA = v_setall_u16(53687);
+        v_uint32x4 ma00, ma01, ma10, ma11;
+        v_uint32x4 addA = v_setall_u32(1 << 7);
+        v_mul_expand((av0 + (av0 << 2)), mulA, ma00, ma01);
+        v_mul_expand((av1 + (av1 << 2)), mulA, ma10, ma11);
+        adiv0 = v_reinterpret_as_s16(v_pack(((ma00 + addA) >> 13), ((ma01 + addA) >> 13)));
+        adiv1 = v_reinterpret_as_s16(v_pack(((ma10 + addA) >> 13), ((ma11 + addA) >> 13)));
 
-        /* y = ify*ify/BASE*ify/BASE; */
-        y_gt = (((ify_gt*ify_gt) >> base_shift)*ify_gt) >> base_shift;
+        v_uint16x8 mulB = v_setall_u16(41943);
+        v_uint32x4 mb00, mb01, mb10, mb11;
+        v_uint32x4 addB = v_setall_u32(1 << 4);
+        v_mul_expand(bv0, mulB, mb00, mb01);
+        v_mul_expand(bv1, mulB, mb10, mb11);
+        bdiv0 = v_reinterpret_as_s16(v_pack((mb00 + addB) >> 9, (mb01 + addB) >> 9));
+        bdiv1 = v_reinterpret_as_s16(v_pack((mb10 + addB) >> 9, (mb11 + addB) >> 9));
 
-        // Combining LT and GT parts
-        /* y, ify = (L <= lThresh) ? ... : ... ; */
-        v_int32x4 mask = liv <= v_setall_s32(lThresh);
-        yiv = v_select(mask, y_lt, y_gt);
-        ify = v_select(mask, ify_lt, ify_gt);
-
-        /*
-            adiv = mulFracConst<24, 500, 256, 0>(a);
-            bdiv = mulFracConst<24, 200, 256, 0>(b);
-            int ifxz[] = {ify + adiv, ify - bdiv};
-        */
-        v_int32x4 adiv, bdiv;
-        adiv = mulFracConst<24, 500, 256, 0>(aiv);
-        bdiv = mulFracConst<24, 200, 256, 0>(biv);
-
+        // 0 <= adiv <= 8356, 0 <= bdiv <= 20890
         /* x = ifxz[0]; y = y; z = ifxz[1]; */
-        xiv = ify + adiv;
-        ziv = ify - bdiv;
+        v_uint16x8 xiv0, xiv1, ziv0, ziv1;
+        v_int16x8 vSubA = v_setall_s16(-128*BASE/500 - minABvalue), vSubB = v_setall_s16(128*BASE/200-1 - minABvalue);
 
-        v_int32x4 v_lt, v_gt;
-        // k = 0
-        /* v = (v <= fThresh) ? ... : ... ; */
-        mask = xiv <= v_setall_s32(fThresh);
+        // int ifxz[] = {ify + adiv, ify - bdiv};
+        // ifxz[k] = abToXZ_b[ifxz[k]-minABvalue];
+        xiv0 = v_reinterpret_as_u16(v_add_wrap(v_add_wrap(ify0, adiv0), vSubA));
+        xiv1 = v_reinterpret_as_u16(v_add_wrap(v_add_wrap(ify1, adiv1), vSubA));
+        ziv0 = v_reinterpret_as_u16(v_add_wrap(v_sub_wrap(ify0, bdiv0), vSubB));
+        ziv1 = v_reinterpret_as_u16(v_add_wrap(v_sub_wrap(ify1, bdiv1), vSubB));
 
-        // Less-than part
-        /* v = v*1000/7787 - BASE*16/116*1000/7787; */
-        v_lt = mulFracConst<14, 7787, 1000, -BASE*16/116*1000/7787>(xiv);
+        uint16_t CV_DECL_ALIGNED(16) v_x0[8], v_x1[8], v_z0[8], v_z1[8];
+        v_store_aligned(v_x0, xiv0 ); v_store_aligned(v_x1, xiv1 );
+        v_store_aligned(v_z0, ziv0 ); v_store_aligned(v_z1, ziv1 );
 
-        // Greater-than part
-        /* v = v*v/BASE*v/BASE; */
-        v_gt = (((xiv*xiv) >> base_shift) * xiv) >> base_shift;
-
-        // Combining LT ang GT parts
-        xiv = v_select(mask, v_lt, v_gt);
-
-        // k = 1: the same as above but for z
-        mask = ziv <= v_setall_s32(fThresh);
-
-        v_lt = mulFracConst<14, 7787, 1000, -BASE*16/116*1000/7787>(ziv);
-
-        v_gt = (((ziv*ziv) >> base_shift) * ziv) >> base_shift;
-        ziv = v_select(mask, v_lt, v_gt);
-    }
-
-    inline void processXYZToRGB(v_int32x4  xiv, v_int32x4  yiv, v_int32x4  ziv,
-                                v_int32x4& bdw, v_int32x4& gdw, v_int32x4& rdw) const
-    {
-        /*
-                ro = CV_DESCALE(C0 * x + C1 * y + C2 * z, shift);
-                go = CV_DESCALE(C3 * x + C4 * y + C5 * z, shift);
-                bo = CV_DESCALE(C6 * x + C7 * y + C8 * z, shift);
-        */
-        int C0 = coeffs[0], C1 = coeffs[1], C2 = coeffs[2];
-        int C3 = coeffs[3], C4 = coeffs[4], C5 = coeffs[5];
-        int C6 = coeffs[6], C7 = coeffs[7], C8 = coeffs[8];
-        v_int32x4 descaleShift = v_setall_s32(1 << (shift-1));
-        rdw = (xiv*v_setall_s32(C0) + yiv*v_setall_s32(C1) + ziv*v_setall_s32(C2) + descaleShift) >> shift;
-        gdw = (xiv*v_setall_s32(C3) + yiv*v_setall_s32(C4) + ziv*v_setall_s32(C5) + descaleShift) >> shift;
-        bdw = (xiv*v_setall_s32(C6) + yiv*v_setall_s32(C7) + ziv*v_setall_s32(C8) + descaleShift) >> shift;
-    }
-
-    inline void processGamma(v_int32x4  inb, v_int32x4  ing, v_int32x4  inr,
-                             v_int32x4& bdw, v_int32x4& gdw, v_int32x4& rdw) const
-    {
-        //limit indices in table and then substitute
-        //ro = tab[ro]; go = tab[go]; bo = tab[bo];
-        v_int32x4 tabsz = v_setall_s32((int)INV_GAMMA_TAB_SIZE-1);
-        int32_t CV_DECL_ALIGNED(16) rshifts[4], gshifts[4], bshifts[4];
-        rdw = v_max(v_setzero_s32(), v_min(tabsz, inr));
-        gdw = v_max(v_setzero_s32(), v_min(tabsz, ing));
-        bdw = v_max(v_setzero_s32(), v_min(tabsz, inb));
-
-        v_store_aligned(rshifts, rdw);
-        v_store_aligned(gshifts, gdw);
-        v_store_aligned(bshifts, bdw);
-
-        rdw = v_int32x4(tab[rshifts[0]], tab[rshifts[1]], tab[rshifts[2]], tab[rshifts[3]]);
-        gdw = v_int32x4(tab[gshifts[0]], tab[gshifts[1]], tab[gshifts[2]], tab[gshifts[3]]);
-        bdw = v_int32x4(tab[bshifts[0]], tab[bshifts[1]], tab[bshifts[2]], tab[bshifts[3]]);
+        xiv00 = v_int32x4(abToXZ_b[v_x0[0]], abToXZ_b[v_x0[1]], abToXZ_b[v_x0[2]], abToXZ_b[v_x0[3]]);
+        xiv01 = v_int32x4(abToXZ_b[v_x0[4]], abToXZ_b[v_x0[5]], abToXZ_b[v_x0[6]], abToXZ_b[v_x0[7]]);
+        xiv10 = v_int32x4(abToXZ_b[v_x1[0]], abToXZ_b[v_x1[1]], abToXZ_b[v_x1[2]], abToXZ_b[v_x1[3]]);
+        xiv11 = v_int32x4(abToXZ_b[v_x1[4]], abToXZ_b[v_x1[5]], abToXZ_b[v_x1[6]], abToXZ_b[v_x1[7]]);
+        ziv00 = v_int32x4(abToXZ_b[v_z0[0]], abToXZ_b[v_z0[1]], abToXZ_b[v_z0[2]], abToXZ_b[v_z0[3]]);
+        ziv01 = v_int32x4(abToXZ_b[v_z0[4]], abToXZ_b[v_z0[5]], abToXZ_b[v_z0[6]], abToXZ_b[v_z0[7]]);
+        ziv10 = v_int32x4(abToXZ_b[v_z1[0]], abToXZ_b[v_z1[1]], abToXZ_b[v_z1[2]], abToXZ_b[v_z1[3]]);
+        ziv11 = v_int32x4(abToXZ_b[v_z1[4]], abToXZ_b[v_z1[5]], abToXZ_b[v_z1[6]], abToXZ_b[v_z1[7]]);
+        // abToXZ_b[i-minABvalue] = v; // -1335 <= v <= 88231
     }
 
     void operator()(const float* src, float* dst, int n) const
@@ -6586,10 +6530,9 @@ struct Lab2RGBinteger
         int i = 0;
         if(enablePackedLab)
         {
-            v_float32x4 vldiv  = v_setall_f32(BASE/100.0f);
-            v_float32x4 vadiv  = v_setall_f32(BASE/256.0f);
+            v_float32x4 vldiv  = v_setall_f32(256.f/100.0f);
             v_float32x4 vf255  = v_setall_f32(255.f);
-            static const int nPixels = 4;
+            static const int nPixels = 16;
             for(; i <= n*3-3*nPixels; i += 3*nPixels, dst += dcn*nPixels)
             {
                 /*
@@ -6597,43 +6540,85 @@ struct Lab2RGBinteger
                 int a = saturate_cast<int>(src[i + 1]*BASE/256);
                 int b = saturate_cast<int>(src[i + 2]*BASE/256);
                 */
-                v_float32x4 vl, va, vb;
-                v_load_deinterleave(src + i, vl, va, vb);
-                vl *= vldiv; va *= vadiv; vb *= vadiv;
-
-                v_int32x4 ivl = v_round(vl), iva = v_round(va), ivb = v_round(vb);
-                v_int32x4 ixv, iyv, izv;
-                v_int32x4 i_r, i_g, i_b;
-                v_int32x4 r_vecs, g_vecs, b_vecs;
-
-                processLabToXYZ(ivl, iva, ivb, ixv, iyv, izv);
-                processXYZToRGB(ixv, iyv, izv, i_b, i_g, i_r);
-                processGamma(i_b, i_g, i_r, b_vecs, g_vecs, r_vecs);
-
-                v_float32x4 v_r, v_g, v_b;
-                v_r = v_cvt_f32(r_vecs)/vf255;
-                v_g = v_cvt_f32(g_vecs)/vf255;
-                v_b = v_cvt_f32(b_vecs)/vf255;
-
-                if(dcn == 4)
+                v_float32x4 vl[4], va[4], vb[4];
+                for(int k = 0; k < 4; k++)
                 {
-                    v_store_interleave(dst, v_b, v_g, v_r, v_setall_f32(alpha));
+                    v_load_deinterleave(src + i + k*3*4, vl[k], va[k], vb[k]);
+                    vl[k] *= vldiv;
                 }
-                else // dcn == 3
+
+                v_int32x4 ivl[4], iva[4], ivb[4];
+                for(int k = 0; k < 4; k++)
                 {
-                    v_store_interleave(dst, v_b, v_g, v_r);
+                    ivl[k] = v_round(vl[k]), iva[k] = v_round(va[k]), ivb[k] = v_round(vb[k]);
+                }
+                v_int16x8 ivl16[2], iva16[2], ivb16[2];
+                ivl16[0] = v_pack(ivl[0], ivl[1]); iva16[0] = v_pack(iva[0], iva[1]); ivb16[0] = v_pack(ivb[0], ivb[1]);
+                ivl16[1] = v_pack(ivl[2], ivl[3]); iva16[1] = v_pack(iva[2], iva[3]); ivb16[1] = v_pack(ivb[2], ivb[3]);
+                v_uint8x16 ivl8, iva8, ivb8;
+                ivl8 = v_reinterpret_as_u8(v_pack(ivl16[0], ivl16[1]));
+                iva8 = v_reinterpret_as_u8(v_pack(iva16[0], iva16[1]));
+                ivb8 = v_reinterpret_as_u8(v_pack(ivb16[0], ivb16[1]));
+
+                v_int32x4 ixv[4], iyv[4], izv[4];
+
+                processLabToXYZ(ivl8, iva8, ivb8, ixv[0], iyv[0], izv[0],
+                                                  ixv[1], iyv[1], izv[1],
+                                                  ixv[2], iyv[2], izv[2],
+                                                  ixv[3], iyv[3], izv[3]);
+                /*
+                        ro = CV_DESCALE(C0 * x + C1 * y + C2 * z, shift);
+                        go = CV_DESCALE(C3 * x + C4 * y + C5 * z, shift);
+                        bo = CV_DESCALE(C6 * x + C7 * y + C8 * z, shift);
+                */
+                v_int32x4 C0 = v_setall_s32(coeffs[0]), C1 = v_setall_s32(coeffs[1]), C2 = v_setall_s32(coeffs[2]);
+                v_int32x4 C3 = v_setall_s32(coeffs[3]), C4 = v_setall_s32(coeffs[4]), C5 = v_setall_s32(coeffs[5]);
+                v_int32x4 C6 = v_setall_s32(coeffs[6]), C7 = v_setall_s32(coeffs[7]), C8 = v_setall_s32(coeffs[8]);
+                v_int32x4 descaleShift = v_setall_s32(1 << (shift-1)), tabsz = v_setall_s32((int)INV_GAMMA_TAB_SIZE-1);
+                for(int k = 0; k < 4; k++)
+                {
+                    v_int32x4 i_r, i_g, i_b;
+                    v_uint32x4 r_vecs, g_vecs, b_vecs;
+                    i_r = (ixv[k]*C0 + iyv[k]*C1 + izv[k]*C2 + descaleShift) >> shift;
+                    i_g = (ixv[k]*C3 + iyv[k]*C4 + izv[k]*C5 + descaleShift) >> shift;
+                    i_b = (ixv[k]*C6 + iyv[k]*C7 + izv[k]*C8 + descaleShift) >> shift;
+
+                    //limit indices in table and then substitute
+                    //ro = tab[ro]; go = tab[go]; bo = tab[bo];
+                    int32_t CV_DECL_ALIGNED(16) rshifts[4], gshifts[4], bshifts[4];
+                    v_int32x4 rs = v_max(v_setzero_s32(), v_min(tabsz, i_r));
+                    v_int32x4 gs = v_max(v_setzero_s32(), v_min(tabsz, i_g));
+                    v_int32x4 bs = v_max(v_setzero_s32(), v_min(tabsz, i_b));
+
+                    v_store_aligned(rshifts, rs);
+                    v_store_aligned(gshifts, gs);
+                    v_store_aligned(bshifts, bs);
+
+                    r_vecs = v_uint32x4(tab[rshifts[0]], tab[rshifts[1]], tab[rshifts[2]], tab[rshifts[3]]);
+                    g_vecs = v_uint32x4(tab[gshifts[0]], tab[gshifts[1]], tab[gshifts[2]], tab[gshifts[3]]);
+                    b_vecs = v_uint32x4(tab[bshifts[0]], tab[bshifts[1]], tab[bshifts[2]], tab[bshifts[3]]);
+
+                    v_float32x4 v_r, v_g, v_b;
+                    v_r = v_cvt_f32(v_reinterpret_as_s32(r_vecs))/vf255;
+                    v_g = v_cvt_f32(v_reinterpret_as_s32(g_vecs))/vf255;
+                    v_b = v_cvt_f32(v_reinterpret_as_s32(b_vecs))/vf255;
+
+                    if(dcn == 4)
+                    {
+                        v_store_interleave(dst + k*dcn*4, v_b, v_g, v_r, v_setall_f32(alpha));
+                    }
+                    else // dcn == 3
+                    {
+                        v_store_interleave(dst + k*dcn*4, v_b, v_g, v_r);
+                    }
                 }
             }
         }
 
         for(; i < n*3; i += 3, dst += dcn)
         {
-            int L = saturate_cast<int>(src[i]*BASE/100.0f);
-            int a = saturate_cast<int>(src[i + 1]*BASE/256);
-            int b = saturate_cast<int>(src[i + 2]*BASE/256);
-
             int ro, go, bo;
-            process(L, a, b, ro, go, bo);
+            process(src[i + 0]*255.f/100.f, src[i + 1], src[i + 2], ro, go, bo);
 
             dst[0] = bo/255.f;
             dst[1] = go/255.f;
@@ -6661,54 +6646,49 @@ struct Lab2RGBinteger
                 */
                 v_uint8x16 u8l, u8a, u8b;
                 v_load_deinterleave(src + i, u8l, u8a, u8b);
-                v_uint16x8 lvec0, lvec1, avec0, avec1, bvec0, bvec1;
-                v_expand(u8l, lvec0, lvec1);
-                v_expand(u8a, avec0, avec1);
-                v_expand(u8b, bvec0, bvec1);
-                v_int16x8 slvec0 = v_reinterpret_as_s16(lvec0), slvec1 = v_reinterpret_as_s16(lvec1);
-                v_int16x8 savec0 = v_reinterpret_as_s16(avec0), savec1 = v_reinterpret_as_s16(avec1);
-                v_int16x8 sbvec0 = v_reinterpret_as_s16(bvec0), sbvec1 = v_reinterpret_as_s16(bvec1);
-                v_int32x4  lvecs[4], avecs[4], bvecs[4];
-                v_expand(slvec0, lvecs[0], lvecs[1]); v_expand(slvec1, lvecs[2], lvecs[3]);
-                v_expand(savec0, avecs[0], avecs[1]); v_expand(savec1, avecs[2], avecs[3]);
-                v_expand(sbvec0, bvecs[0], bvecs[1]); v_expand(sbvec1, bvecs[2], bvecs[3]);
-
-                v_int32x4  lv[4], av[4], bv[4];
-                for(int k = 0; k < 4; k++)
-                {
-                    /* L = L*BASE/255; */
-                    lv[k] = mulFracConst<14, 255, BASE, 0>(lvecs[k]);
-                    /* a = (a - 128)*BASE/256; b = (a - 128)*BASE/256; */
-                    av[k] = (avecs[k] - v_setall_s32(128)) << (base_shift - 8);
-                    bv[k] = (bvecs[k] - v_setall_s32(128)) << (base_shift - 8);
-                }
 
                 v_int32x4 xiv[4], yiv[4], ziv[4];
+                processLabToXYZ(u8l, u8a, u8b, xiv[0], yiv[0], ziv[0],
+                                               xiv[1], yiv[1], ziv[1],
+                                               xiv[2], yiv[2], ziv[2],
+                                               xiv[3], yiv[3], ziv[3]);
+                /*
+                        ro = CV_DESCALE(C0 * x + C1 * y + C2 * z, shift);
+                        go = CV_DESCALE(C3 * x + C4 * y + C5 * z, shift);
+                        bo = CV_DESCALE(C6 * x + C7 * y + C8 * z, shift);
+                */
+                v_int32x4 C0 = v_setall_s32(coeffs[0]), C1 = v_setall_s32(coeffs[1]), C2 = v_setall_s32(coeffs[2]);
+                v_int32x4 C3 = v_setall_s32(coeffs[3]), C4 = v_setall_s32(coeffs[4]), C5 = v_setall_s32(coeffs[5]);
+                v_int32x4 C6 = v_setall_s32(coeffs[6]), C7 = v_setall_s32(coeffs[7]), C8 = v_setall_s32(coeffs[8]);
+                v_int32x4 descaleShift = v_setall_s32(1 << (shift-1));
+                v_int32x4 tabsz = v_setall_s32((int)INV_GAMMA_TAB_SIZE-1);
+                v_uint32x4 r_vecs[4], g_vecs[4], b_vecs[4];
                 for(int k = 0; k < 4; k++)
                 {
-                    processLabToXYZ(lv[k], av[k], bv[k], xiv[k], yiv[k], ziv[k]);
+                    v_int32x4 i_r, i_g, i_b;
+                    i_r = (xiv[k]*C0 + yiv[k]*C1 + ziv[k]*C2 + descaleShift) >> shift;
+                    i_g = (xiv[k]*C3 + yiv[k]*C4 + ziv[k]*C5 + descaleShift) >> shift;
+                    i_b = (xiv[k]*C6 + yiv[k]*C7 + ziv[k]*C8 + descaleShift) >> shift;
+
+                    //limit indices in table and then substitute
+                    //ro = tab[ro]; go = tab[go]; bo = tab[bo];
+                    int32_t CV_DECL_ALIGNED(16) rshifts[4], gshifts[4], bshifts[4];
+                    v_int32x4 rs = v_max(v_setzero_s32(), v_min(tabsz, i_r));
+                    v_int32x4 gs = v_max(v_setzero_s32(), v_min(tabsz, i_g));
+                    v_int32x4 bs = v_max(v_setzero_s32(), v_min(tabsz, i_b));
+
+                    v_store_aligned(rshifts, rs);
+                    v_store_aligned(gshifts, gs);
+                    v_store_aligned(bshifts, bs);
+
+                    r_vecs[k] = v_uint32x4(tab[rshifts[0]], tab[rshifts[1]], tab[rshifts[2]], tab[rshifts[3]]);
+                    g_vecs[k] = v_uint32x4(tab[gshifts[0]], tab[gshifts[1]], tab[gshifts[2]], tab[gshifts[3]]);
+                    b_vecs[k] = v_uint32x4(tab[bshifts[0]], tab[bshifts[1]], tab[bshifts[2]], tab[bshifts[3]]);
                 }
 
-                v_int32x4 i_r[4], i_g[4], i_b[4];
-                for(int k = 0; k < 4; k++)
-                {
-                    processXYZToRGB(xiv[k], yiv[k], ziv[k], i_b[k], i_g[k], i_r[k]);
-                }
-
-                v_int32x4 r_vecs[4], g_vecs[4], b_vecs[4];
-                for(int k = 0; k < 4; k++)
-                {
-                    processGamma(i_b[k], i_g[k], i_r[k], b_vecs[k], g_vecs[k], r_vecs[k]);
-                }
-
-                v_int16x8 s_rvec0, s_rvec1, s_gvec0, s_gvec1, s_bvec0, s_bvec1;
-                s_rvec0 = v_pack(r_vecs[0], r_vecs[1]), s_rvec1 = v_pack(r_vecs[2], r_vecs[3]);
-                s_gvec0 = v_pack(g_vecs[0], g_vecs[1]), s_gvec1 = v_pack(g_vecs[2], g_vecs[3]);
-                s_bvec0 = v_pack(b_vecs[0], b_vecs[1]), s_bvec1 = v_pack(b_vecs[2], b_vecs[3]);
-
-                v_uint16x8 u_rvec0 = v_reinterpret_as_u16(s_rvec0), u_rvec1 = v_reinterpret_as_u16(s_rvec1);
-                v_uint16x8 u_gvec0 = v_reinterpret_as_u16(s_gvec0), u_gvec1 = v_reinterpret_as_u16(s_gvec1);
-                v_uint16x8 u_bvec0 = v_reinterpret_as_u16(s_bvec0), u_bvec1 = v_reinterpret_as_u16(s_bvec1);
+                v_uint16x8 u_rvec0 = v_pack(r_vecs[0], r_vecs[1]), u_rvec1 = v_pack(r_vecs[2], r_vecs[3]);
+                v_uint16x8 u_gvec0 = v_pack(g_vecs[0], g_vecs[1]), u_gvec1 = v_pack(g_vecs[2], g_vecs[3]);
+                v_uint16x8 u_bvec0 = v_pack(b_vecs[0], b_vecs[1]), u_bvec1 = v_pack(b_vecs[2], b_vecs[3]);
 
                 v_uint8x16 u8_b, u8_g, u8_r;
                 u8_b = v_pack(u_bvec0, u_bvec1);
@@ -6729,13 +6709,7 @@ struct Lab2RGBinteger
         for (; i < n*3; i += 3, dst += dcn)
         {
             int ro, go, bo;
-            //int L = src[i + 0]*BASE/255;
-            //no truncation at division
-            int L = mulFracConst<14, 255, BASE, 0>(src[i + 0]);
-            int a = (src[i + 1] - 128)*BASE/256;
-            int b = (src[i + 2] - 128)*BASE/256;
-
-            process(L, a, b, ro, go, bo);
+            process(src[i + 0], src[i + 1], src[i + 2], ro, go, bo);
 
             dst[0] = saturate_cast<uchar>(bo);
             dst[1] = saturate_cast<uchar>(go);

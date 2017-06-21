@@ -1539,7 +1539,6 @@ struct Lab2RGBinteger
 
                 v_int32x4 ixv[4], iyv[4], izv[4];
 
-
                 processLabToXYZ(ivl8, iva8, ivb8, ixv[0], iyv[0], izv[0],
                                                   ixv[1], iyv[1], izv[1],
                                                   ixv[2], iyv[2], izv[2],
