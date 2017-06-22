@@ -957,9 +957,9 @@ struct RGB2Lab_f
             float Y = R*C3 + G*C4 + B*C5;
             float Z = R*C6 + G*C7 + B*C8;
 
-            float FX = X > 0.008856f ? std::pow(X, _1_3f) : (7.787f * X + _a);
-            float FY = Y > 0.008856f ? std::pow(Y, _1_3f) : (7.787f * Y + _a);
-            float FZ = Z > 0.008856f ? std::pow(Z, _1_3f) : (7.787f * Z + _a);
+            float FX = X > 0.008856f ? cubeRoot(X) : (7.787f * X + _a);
+            float FY = Y > 0.008856f ? cubeRoot(Y) : (7.787f * Y + _a);
+            float FZ = Z > 0.008856f ? cubeRoot(Z) : (7.787f * Z + _a);
 
             float L = Y > 0.008856f ? (116.f * FY - 16.f) : (903.3f * Y);
             float a = 500.f * (FX - FY);
