@@ -6448,7 +6448,7 @@ struct Lab2RGBinteger
     }
 
     // L, a, b shoule be in their natural range
-    inline void processLabToXYZ(v_uint8x16   lv, v_uint8x16   av, v_uint8x16   bv,
+    inline void processLabToXYZ(const v_uint8x16& lv, const v_uint8x16& av, const v_uint8x16& bv,
                                 v_int32x4& xiv00, v_int32x4& yiv00, v_int32x4& ziv00,
                                 v_int32x4& xiv01, v_int32x4& yiv01, v_int32x4& ziv01,
                                 v_int32x4& xiv10, v_int32x4& yiv10, v_int32x4& ziv10,
