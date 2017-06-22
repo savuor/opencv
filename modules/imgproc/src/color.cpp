@@ -9107,7 +9107,7 @@ static bool ocl_cvtColor( InputArray _src, OutputArray _dst, int code, int dcn )
                     coeffs[j + bidx]       = c2;
 
                     CV_Assert( c0 >= 0 && c1 >= 0 && c2 >= 0 &&
-                               c0 + c1 + c2 < softfloat(1.5f)*softfloat(lab ? LabCbrtTabScale : 1));
+                               c0 + c1 + c2 < (lab ? softfloat((int)LAB_CBRT_TAB_SIZE) : softfloat(3)/softfloat(2)));
                 }
 
                 softfloat d = softfloat(_whitept[0]) +
@@ -9120,7 +9120,7 @@ static bool ocl_cvtColor( InputArray _src, OutputArray _dst, int code, int dcn )
                 Mat(1, 9, CV_32FC1, coeffs).copyTo(ucoeffs);
             }
 
-            float _a = 16.0f / 116.0f;
+            float _a = softfloat(16)/softfloat(116);
             ocl::KernelArg ucoeffsarg = ocl::KernelArg::PtrReadOnly(ucoeffs);
 
             if (lab)
@@ -9193,9 +9193,8 @@ static bool ocl_cvtColor( InputArray _src, OutputArray _dst, int code, int dcn )
         _dst.create(sz, CV_MAKETYPE(depth, dcn));
         dst = _dst.getUMat();
 
-        float lThresh = softfloat(0.008856f) * softfloat(903.3f);
-        float fThresh = softfloat(7.787f) * softfloat(0.008856f) +
-                        softfloat(16.0f) / softfloat(116.0f);
+        float lThresh = softfloat::fromRaw(0x40fffced); // 0.008856f * 903.3f
+        float fThresh = softfloat::fromRaw(0x3e53dbaf); // 7.787f * 0.008856f + 16.0f / 116.0f
 
         ocl::KernelArg srcarg = ocl::KernelArg::ReadOnlyNoSize(src),
                 dstarg = ocl::KernelArg::WriteOnly(dst),
