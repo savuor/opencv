@@ -5876,8 +5876,8 @@ static void initLabTabs()
     static bool initialized = false;
     if(!initialized)
     {
-        static const softfloat lthresh = softfloat::fromRaw(0x3c1118c2); // 0.008856f
-        static const softfloat lscale  = softfloat::fromRaw(0x40f92f1b); // 7.787f
+        static const softfloat lthresh = softfloat(216) / softfloat(24389); // 0.008856f = (6/29)^3
+        static const softfloat lscale  = softfloat(841) / softfloat(108); // 7.787f = (29/3)^3/(29*4)
         static const softfloat lbias = softfloat(16) / softfloat(116);
         static const softfloat f255(255);
 
@@ -5929,14 +5929,14 @@ static void initLabTabs()
         for(i = 0; i < 256; i++)
         {
             int y, ify;
-            //0.008856 * 903.3 * 255.0 / 100.0 == 20.39904324
+            //8 * 255.0 / 100.0 == 20.4
             if( i <= 20)
             {
                 //yy = li / 903.3f;
-                //y = L*100/903.3f;
-                y = cvRound(softfloat(i*BASE*1000)/softfloat(9033*255));
-                //fy = 7.787f * yy + 16.0f / 116.0f;
-                ify = cvRound(softfloat(BASE)*(softfloat(16)/softfloat(116) + softfloat(i*7787)/softfloat(255*9033)));
+                //y = L*100/903.3f; 903.3f = (29/3)^3, 255 = 17*3*5
+                y = cvRound(softfloat(i*BASE*20*9)/softfloat(17*29*29*29));
+                //fy = 7.787f * yy + 16.0f / 116.0f; 7.787f = (29/3)^3/(29*4)
+                ify = cvRound(softfloat(BASE)*(softfloat(16)/softfloat(116) + softfloat(i*5)/softfloat(3*17*29)));
             }
             else
             {
@@ -5956,11 +5956,12 @@ static void initLabTabs()
         for(i = minABvalue; i < LAB_BASE*9/4+minABvalue; i++)
         {
             int v;
-            //(7.787f * 0.008856f + 16.0f / 116.0f)*BASE = 3389.730
+            //6.f/29.f*BASE = 3389.730
             if(i <= 3390)
             {
                 //fxz[k] = (fxz[k] - 16.0f / 116.0f) / 7.787f;
-                v = i*1000/7787 - BASE*16/116*1000/7787;
+                // 7.787f = (29/3)^3/(29*4)
+                v = i*108/841 - BASE*16/116*108/841;
             }
             else
             {
@@ -6099,7 +6100,7 @@ struct RGB2Lab_f
             float X = R*C0 + G*C1 + B*C2;
             float Y = R*C3 + G*C4 + B*C5;
             float Z = R*C6 + G*C7 + B*C8;
-
+            // 7.787f = (29/3)^3/(29*4), 0.008856f = (6/29)^3, 903.3 = (29/3)^3
             float FX = X > 0.008856f ? std::pow(X, _1_3f) : (7.787f * X + _a);
             float FY = Y > 0.008856f ? std::pow(Y, _1_3f) : (7.787f * Y + _a);
             float FZ = Z > 0.008856f ? std::pow(Z, _1_3f) : (7.787f * Z + _a);
@@ -6143,8 +6144,8 @@ struct Lab2RGBfloat
             coeffs[i+blueIdx*3]     = (softfloat(_coeffs[i+6])*softfloat(_whitept[i]));
         }
 
-        lThresh = softfloat::fromRaw(0x40fffced); // 0.008856f * 903.3f
-        fThresh = softfloat::fromRaw(0x3e53dbaf); // 7.787f * 0.008856f + 16.0f / 116.0f
+        lThresh = softfloat(8); // 0.008856f * 903.3f  = (6/29)^3*(29/3)^3 = 8
+        fThresh = softfloat(6)/softfloat(29); // 7.787f * 0.008856f + 16.0f / 116.0f = 6/29
 
         #if CV_SSE2
         haveSIMD = checkHardwareSupport(CV_CPU_SSE2);
@@ -6155,6 +6156,7 @@ struct Lab2RGBfloat
     void process(__m128& v_li0, __m128& v_li1, __m128& v_ai0,
                  __m128& v_ai1, __m128& v_bi0, __m128& v_bi1) const
     {
+        // 903.3 = (29/3)^3, 7.787 = (29/3)^3/(29*4)
         __m128 v_y00 = _mm_mul_ps(v_li0, _mm_set1_ps(1.0f/903.3f));
         __m128 v_y01 = _mm_mul_ps(v_li1, _mm_set1_ps(1.0f/903.3f));
         __m128 v_fy00 = _mm_add_ps(_mm_mul_ps(_mm_set1_ps(7.787f), v_y00), _mm_set1_ps(16.0f/116.0f));
@@ -6320,6 +6322,7 @@ struct Lab2RGBfloat
             float ai = src[i + 1];
             float bi = src[i + 2];
 
+            // 903.3 = (29/3)^3, 7.787 = (29/3)^3/(29*4)
             float y, fy;
             if (li <= lThresh)
             {
@@ -6380,9 +6383,9 @@ struct Lab2RGBinteger
 
     static const int base_shift = 14;
     static const int BASE = (1 << base_shift);
-    // lThresh == 0.008856f * 903.3f * (long long int)BASE/100
+    // lThresh == (6/29)^3 * (29/3)^3 * BASE/100
     static const int lThresh = 1311;
-    // fThresh == (7.787f * 0.008856f + 16.0f / 116.0f)*BASE
+    // fThresh == ((29/3)^3/(29*4) * (6/29)^3 + 16/116)*BASE
     static const int fThresh = 3390;
     // base16_116 == BASE*16/116
     static const int base16_116 = 2260;
@@ -9193,8 +9196,8 @@ static bool ocl_cvtColor( InputArray _src, OutputArray _dst, int code, int dcn )
         _dst.create(sz, CV_MAKETYPE(depth, dcn));
         dst = _dst.getUMat();
 
-        float lThresh = softfloat::fromRaw(0x40fffced); // 0.008856f * 903.3f
-        float fThresh = softfloat::fromRaw(0x3e53dbaf); // 7.787f * 0.008856f + 16.0f / 116.0f
+        float lThresh = softfloat(8); // 0.008856f * 903.3f  = (6/29)^3*(29/3)^3 = 8
+        float fThresh = softfloat(6)/softfloat(29); // 7.787f * 0.008856f + 16.0f / 116.0f = 6/29
 
         ocl::KernelArg srcarg = ocl::KernelArg::ReadOnlyNoSize(src),
                 dstarg = ocl::KernelArg::WriteOnly(dst),
