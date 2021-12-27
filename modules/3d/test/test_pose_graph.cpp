@@ -3,7 +3,9 @@
 // of this distribution and at http://opencv.org/license.html
 
 #include "test_precomp.hpp"
-#include <opencv2/3d/detail/pose_graph.hpp>
+#include <opencv2/3d/detail/optimizer.hpp>
+
+#include <opencv2/core/dualquaternion.hpp>
 
 //DEBUG
 #include <opencv2/core/dualquaternion.hpp>
@@ -11,6 +13,8 @@
 namespace opencv_test { namespace {
 
 using namespace cv;
+
+#ifdef HAVE_EIGEN
 
 static Affine3d readAffine(std::istream& input)
 {
@@ -97,7 +101,7 @@ static Ptr<detail::PoseGraph> readG2OFile(const std::string& g2oFileName)
 }
 
 
-TEST( PoseGraph, sphereG2O )
+TEST(PoseGraph, sphereG2O)
 {
     // Test takes 15+ sec in Release mode and 400+ sec in Debug mode
     applyTestTag(CV_TEST_TAG_LONG, CV_TEST_TAG_DEBUG_VERYLONG);
@@ -109,20 +113,27 @@ TEST( PoseGraph, sphereG2O )
     // In IEEE Intl.Conf.on Robotics and Automation(ICRA), pages 4597 - 4604, 2015.
 
     std::string filename = cvtest::TS::ptr()->get_data_path() + "/cv/rgbd/sphere_bignoise_vertex3.g2o";
+
     Ptr<detail::PoseGraph> pg = readG2OFile(filename);
 
 #ifdef HAVE_EIGEN
     // You may change logging level to view detailed optimization report
     // For example, set env. variable like this: OPENCV_LOG_LEVEL=INFO
 
-    int iters = pg->optimize();
+    // geoScale=1 is experimental, not guaranteed to work on other problems
+    // the rest are default params
+    pg->createOptimizer(LevMarq::Settings().setGeoScale(1.0)
+                        .setMaxIterations(100)
+                        .setCheckRelEnergyChange(true)
+                        .setRelEnergyDeltaTolerance(1e-6)
+                        .setGeodesic(true));
 
-    ASSERT_GE(iters, 0);
-    ASSERT_LE(iters, 36); // should converge in 36 iterations
+    auto r = pg->optimize();
 
-    double energy = pg->calcEnergy();
+    EXPECT_TRUE(r.found);
+    EXPECT_LE(r.iters, 20); // should converge in 31 iterations
 
-    ASSERT_LE(energy, 1.47723e+06); // should converge to 1.47722e+06 or less
+    EXPECT_LE(r.energy, 1.47723e+06); // should converge to 1.47722e+06 or less
 
     // Add the "--test_debug" to arguments to see resulting pose graph nodes positions
     if (cvtest::debugLevel > 0)
@@ -146,15 +157,11 @@ TEST( PoseGraph, sphereG2O )
 
         of.close();
     }
-#else
-    throw SkipTestException("Build with Eigen required for pose graph optimization");
-#endif
 }
 
 // ------------------------------------------------------------------------------------------
 
-
-
+// Wireframe meshes for debugging visualization purposes
 struct Mesh
 {
     std::vector<Point3f> pts;
@@ -170,7 +177,7 @@ struct Mesh
 
         std::copy(this->lines.begin(), this->lines.end(), std::back_inserter(mo.lines));
         std::transform(m2.lines.begin(), m2.lines.end(), std::back_inserter(mo.lines),
-                       [sz1](Vec2i ab) { return Vec2i(ab[0] + sz1, ab[1] + sz1); });
+                       [sz1](Vec2i ab) { return Vec2i(ab[0] + (int)sz1, ab[1] + (int)sz1); });
 
         return mo;
     }
@@ -235,7 +242,7 @@ Mesh seg7(int d)
     return digits[d];
 }
 
-Mesh drawId(int x)
+Mesh drawId(size_t x)
 {
     vector<int> digits;
     do
@@ -246,7 +253,7 @@ Mesh drawId(int x)
     while (x > 0);
     float spacing = 0.2f;
     Mesh m;
-    for (int i = 0; i < digits.size(); i++)
+    for (size_t i = 0; i < digits.size(); i++)
     {
         Mesh digit = seg7(digits[digits.size() - 1 - i]);
         Vec6f bb = digit.getBoundingBox();
@@ -262,7 +269,7 @@ Mesh drawId(int x)
 }
 
 
-Mesh drawFromTo(int f, int t)
+Mesh drawFromTo(size_t f, size_t t)
 {
     Mesh m;
 
@@ -296,7 +303,7 @@ Mesh drawPoseGraph(Ptr<detail::PoseGraph> pg)
 
     // edges
     margin = Affine3f().translate(Vec3f(0.05f, 0.05f, 0));
-    for (int i = 0; i < pg->getNumEdges(); i++)
+    for (size_t i = 0; i < pg->getNumEdges(); i++)
     {
         Affine3f pose = pg->getEdgePose(i);
         size_t sid = pg->getEdgeStart(i);
@@ -328,23 +335,25 @@ void writeObj(const std::string& fname, const Mesh& m)
     of.close();
 }
 
+
 TEST(PoseGraph, simple)
 {
+
     Ptr<detail::PoseGraph> pg = detail::PoseGraph::create();
 
     DualQuatf true0(1, 0, 0, 0, 0, 0, 0, 0);
-    DualQuatf true1 = DualQuatf::createFromPitch(CV_PI / 3.0f, 10.0f, Vec3f(1, 1.5f, 1.2f), Vec3f());
+    DualQuatf true1 = DualQuatf::createFromPitch((float)CV_PI / 3.0f, 10.0f, Vec3f(1, 1.5f, 1.2f), Vec3f());
 
     DualQuatf pose0 = true0;
     vector<DualQuatf> noise(7);
-    for (int i = 0; i < noise.size(); i++)
+    for (size_t i = 0; i < noise.size(); i++)
     {
         float angle = cv::theRNG().uniform(-1.f, 1.f);
         float shift = cv::theRNG().uniform(-2.f, 2.f);
         Matx31f axis = Vec3f::randu(0.f, 1.f), moment = Vec3f::randu(0.f, 1.f);
         noise[i] = DualQuatf::createFromPitch(angle, shift,
-                                              Vec3f(axis(0), axis(1), axis(2)),
-                                              Vec3f(moment(0), moment(1), moment(2)));
+            Vec3f(axis(0), axis(1), axis(2)),
+            Vec3f(moment(0), moment(1), moment(2)));
     }
 
     DualQuatf pose1 = noise[0] * true1;
@@ -372,7 +381,7 @@ TEST(PoseGraph, simple)
         writeObj("pg_simple_in.obj", allMeshes);
     }
 
-    int iters = pg->optimize();
+    auto r = pg->optimize();
 
     Mesh after = drawPoseGraph(pg);
 
@@ -382,8 +391,58 @@ TEST(PoseGraph, simple)
         writeObj("pg_simple_out.obj", after);
     }
 
+    EXPECT_TRUE(r.found);
+}
+#else
+
+TEST(PoseGraph, sphereG2O)
+{
+    throw SkipTestException("Build with Eigen required for pose graph optimization");
 }
 
+TEST(PoseGraph, simple)
+{
+    throw SkipTestException("Build with Eigen required for pose graph optimization");
+}
+#endif
+
+TEST(LevMarq, Rosenbrock)
+{
+    auto f = [](double x, double y) -> double
+    {
+        return (1.0 - x) * (1.0 - x) + 100.0 * (y - x * x) * (y - x * x);
+    };
+
+    auto j = [](double x, double y) -> Matx12d
+    {
+        return {/*dx*/ -2.0 + 2.0 * x - 400.0 * x * y + 400.0 * x*x*x,
+                /*dy*/ 200.0 * y - 200.0 * x*x,
+                };
+    };
+
+    LevMarq solver(2, [f, j](InputOutputArray param, OutputArray err, OutputArray jv) -> bool
+    {
+            Vec2d v = param.getMat();
+            double x = v[0], y = v[1];
+            err.create(1, 1, CV_64F);
+            err.getMat().at<double>(0) = f(x, y);
+            if (jv.needed())
+            {
+                jv.create(1, 2, CV_64F);
+                Mat(j(x, y)).copyTo(jv);
+            }
+            return true;
+    },
+    LevMarq::Settings().setGeodesic(true));
+
+    Mat_<double> x (Vec2d(1, 3));
+
+    auto r = solver.run(x);
+
+    EXPECT_TRUE(r.found);
+    EXPECT_LT(r.energy, 0.035);
+    EXPECT_LE(r.iters, 17);
+}
 
 
 }} // namespace

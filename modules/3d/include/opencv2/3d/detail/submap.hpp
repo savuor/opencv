@@ -7,9 +7,9 @@
 
 #include <opencv2/core.hpp>
 #include <opencv2/core/affine.hpp>
-#include "opencv2/3d/detail/pose_graph.hpp"
+#include "opencv2/3d/detail/optimizer.hpp"
 
-//DEBUG
+//TODO: remove it when it is rewritten to robust pose graph
 #include "opencv2/core/dualquaternion.hpp"
 
 #include <type_traits>
@@ -35,11 +35,6 @@ public:
 
         void accumulatePose(const Affine3f& _pose, int _weight = 1)
         {
-            //DEBUG
-            //Matx44f accPose = estimatedPose.matrix * weight + _pose.matrix * _weight;
-            //weight         += _weight;
-            //accPose        /= float(weight);
-            //estimatedPose   = Affine3f(accPose);
             DualQuatf accPose = DualQuatf::createFromAffine3(estimatedPose) * float(weight) + DualQuatf::createFromAffine3(_pose) * float(_weight);
             weight += _weight;
             accPose = accPose / float(weight);
@@ -60,7 +55,7 @@ public:
     virtual ~Submap() = default;
 
     virtual void integrate(InputArray _depth, float depthFactor, const cv::Matx33f& intrinsics, const int currframeId);
-    virtual void raycast(const cv::Affine3f& cameraPose, const cv::Matx33f& intrinsics, cv::Size frameSize,
+    virtual void raycast(const Odometry& icp, const cv::Affine3f& cameraPose, const cv::Matx33f& intrinsics, cv::Size frameSize,
                          OutputArray points = noArray(), OutputArray normals = noArray());
 
     virtual int getTotalAllocatedBlocks() const { return int(volume->getTotalVolumeUnits()); };
@@ -101,7 +96,9 @@ public:
     //! TODO: Should we support submaps for regular volumes?
     static constexpr int FRAME_VISIBILITY_THRESHOLD = 5;
 
-    Ptr<OdometryFrame> frame;
+    //! TODO: Add support for GPU arrays (UMat)
+    OdometryFrame frame;
+    OdometryFrame renderFrame;
 
     std::shared_ptr<Volume> volume;
 };
@@ -116,17 +113,25 @@ void Submap<MatType>::integrate(InputArray _depth, float depthFactor, const cv::
 }
 
 template<typename MatType>
-void Submap<MatType>::raycast(const cv::Affine3f& _cameraPose, const cv::Matx33f& intrinsics, cv::Size frameSize,
+void Submap<MatType>::raycast(const Odometry& icp, const cv::Affine3f& _cameraPose, const cv::Matx33f& intrinsics, cv::Size frameSize,
                               OutputArray points, OutputArray normals)
 {
     if (!points.needed() && !normals.needed())
     {
         MatType pts, nrm;
-        frame->getPyramidAt(pts, OdometryFrame::PYR_CLOUD, 0);
-        frame->getPyramidAt(nrm, OdometryFrame::PYR_NORM, 0);
+
+        frame.getPyramidAt(pts, OdometryFramePyramidType::PYR_CLOUD, 0);
+        frame.getPyramidAt(nrm, OdometryFramePyramidType::PYR_NORM, 0);
         volume->raycast(_cameraPose.matrix, intrinsics, frameSize, pts, nrm);
-        frame->setPyramidAt(pts, OdometryFrame::PYR_CLOUD, 0);
-        frame->setPyramidAt(nrm, OdometryFrame::PYR_NORM,  0);
+        frame.setPyramidAt(pts, OdometryFramePyramidType::PYR_CLOUD, 0);
+        frame.setPyramidAt(nrm, OdometryFramePyramidType::PYR_NORM,  0);
+
+        renderFrame = frame;
+
+        Mat depth;
+        frame.getDepth(depth);
+        frame = icp.createOdometryFrame();
+        frame.setDepth(depth);
     }
     else
     {
@@ -155,30 +160,6 @@ bool Submap<MatType>::addEdgeToSubmap(const int tarSubmapID, const Affine3f& tar
         return false;
     }
 }
-
-template<typename MatType>
-bool Submap<MatType>::addEdgeToSubmap(const int tarSubmapID, const Affine3f& tarPose)
-{
-    auto iter = constraints.find(tarSubmapID);
-
-    // if there is NO edge of currSubmap to tarSubmap.
-    if (iter == constraints.end())
-    {
-        // Frome pose to tarPose transformation
-        Affine3f estimatePose = tarPose * pose.inv();
-
-        // Create new Edge.
-        PoseConstraint& preConstrain = getConstraint(tarSubmapID);
-        preConstrain.accumulatePose(estimatePose, 1);
-
-        return true;
-    }
-    else
-    {
-        return false;
-    }
-}
-
 
 /**
  * @brief: Manages all the created submaps for a particular scene
@@ -226,7 +207,7 @@ public:
     Ptr<SubmapT> getCurrentSubmap(void) const;
 
     int estimateConstraint(int fromSubmapId, int toSubmapId, int& inliers, Affine3f& inlierPose);
-    bool updateMap(int _frameId, Ptr<OdometryFrame> _frame);
+    bool updateMap(int frameId, const OdometryFrame& frame);
 
     bool addEdgeToCurrentSubmap(const int currentSubmapID, const int tarSubmapID);
 
@@ -302,7 +283,7 @@ bool SubmapManager<MatType>::shouldCreateSubmap(int currFrameId)
     Ptr<SubmapT> currSubmap = getSubmap(currSubmapId);
     float ratio             = currSubmap->calcVisibilityRatio(currFrameId);
 
-    //DEBUG
+    //TODO: fix this when a new pose graph is ready
     // if (ratio < 0.2f)
     if (ratio < 0.5f)
         return true;
@@ -392,7 +373,6 @@ int SubmapManager<MatType>::estimateConstraint(int fromSubmapId, int toSubmapId,
     }
 
     int localInliers = 0;
-    //DEBUG
     DualQuatf inlierConstraint;
     for (int i = 0; i < int(weights.size()); i++)
     {
@@ -452,7 +432,7 @@ bool SubmapManager<MatType>::addEdgeToCurrentSubmap(const int currentSubmapID, c
 }
 
 template<typename MatType>
-bool SubmapManager<MatType>::updateMap(int _frameId, Ptr<OdometryFrame> _frame)
+bool SubmapManager<MatType>::updateMap(int _frameId, const OdometryFrame& _frame)
 {
     bool mapUpdated = false;
     int changedCurrentMapId = -1;
