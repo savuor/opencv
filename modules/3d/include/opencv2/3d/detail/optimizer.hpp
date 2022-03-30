@@ -8,6 +8,10 @@
 #include "opencv2/core/affine.hpp"
 #include "opencv2/core/quaternion.hpp"
 #include "opencv2/3d.hpp"
+#include <unordered_set>
+
+//DEBUG
+#include <fstream>
 
 namespace cv
 {
@@ -86,6 +90,40 @@ public:
 };
 
 
+enum PoseGraphNodeFlags
+{
+    // a node is changed during optimization
+    NODE_NOFIX = 0,
+    // a node is not changed during optimization
+    NODE_FIXED = 1,
+    // a tag indicating that this node represents a scene fragment
+    SUBMAP_NODE = 2,
+    // a tag indicating that this node represents a camera pose
+    FRAME_NODE = 4
+};
+
+enum PoseGraphRobustFlags
+{
+    // Don't use robust weights
+    ROBUST_DISABLED = 0,
+    // Tukey function for weights
+    ROBUST_TUKEY = 1,
+    // Huber function for weights
+    ROBUST_HUBER = 2,
+    // Average standard deviation for sigma estimation
+    ROBUST_STD = 4,
+    // Median absolute deviation for sigma estimation
+    ROBUST_MAD = 8
+};
+
+enum PoseGraphErrorApplyFlags
+{
+    // Edge pose is applied from right side: x_j ~ x_i * e_ij
+    ERROR_RIGHT = 0,
+    // Edge pose is applied from left side: x_j ~ e_ij * x_i
+    ERROR_LEFT = 1
+};
+
 // ATTENTION! This class is used internally in Large KinFu.
 // It has been pushed to publicly available headers for tests only.
 // Source compatibility of this API is not guaranteed in the future.
@@ -97,11 +135,11 @@ public:
 class CV_EXPORTS_W PoseGraph
 {
 public:
-    static Ptr<PoseGraph> create();
+    static Ptr<PoseGraph> create(int robustFlags = ROBUST_DISABLED, int errorApplyFlags = ERROR_RIGHT);
     virtual ~PoseGraph();
 
     // Node may have any id >= 0
-    virtual void addNode(size_t _nodeId, const Affine3d& _pose, bool fixed) = 0;
+    virtual void addNode(size_t _nodeId, const Affine3d& _pose, int flags) = 0;
     virtual bool isNodeExist(size_t nodeId) const = 0;
     virtual bool setNodeFixed(size_t nodeId, bool fixed) = 0;
     virtual bool isNodeFixed(size_t nodeId) const = 0;
@@ -109,7 +147,15 @@ public:
     virtual std::vector<size_t> getNodesIds() const = 0;
     virtual size_t getNumNodes() const = 0;
 
+    virtual std::unordered_set<size_t> getInNodes(size_t nodeId) const = 0;
+    virtual std::unordered_set<size_t> getOutNodes(size_t nodeId) const = 0;
+
+    virtual std::unordered_set<size_t> getInEdges(size_t nodeId) const = 0;
+    virtual std::unordered_set<size_t> getOutEdges(size_t nodeId) const = 0;
+
     // Edges have consequent indices starting from 0
+    // Both source and target nodes should be already added when adding an edge between them
+    // Multiedges are allowed
     virtual void addEdge(size_t _sourceNodeId, size_t _targetNodeId, const Affine3f& _transformation,
                          const Matx66f& _information = Matx66f::eye()) = 0;
     virtual size_t getEdgeStart(size_t i) const = 0;
