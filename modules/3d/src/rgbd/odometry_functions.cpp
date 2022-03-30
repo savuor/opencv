@@ -64,6 +64,7 @@ void prepareRGBFrameBase(OdometryFrame& frame, OdometrySettings settings)
             TMat pyr0;
             frame.getPyramidAt(pyr0, OdometryFramePyramidType::PYR_IMAGE, 0);
             frame.setImage(pyr0);
+            image = pyr0;
         }
         else
             CV_Error(Error::StsBadSize, "Image or pyramidImage have to be set.");
@@ -91,6 +92,8 @@ void prepareRGBFrameBase(OdometryFrame& frame, OdometrySettings settings)
         }
         else
             CV_Error(Error::StsBadSize, "Depth or pyramidDepth or pyramidCloud have to be set.");
+
+        frame.getDepth(depth);
     }
     checkDepth(depth, image.size());
 
@@ -101,6 +104,7 @@ void prepareRGBFrameBase(OdometryFrame& frame, OdometrySettings settings)
         TMat pyr0;
         frame.getPyramidAt(pyr0, OdometryFramePyramidType::PYR_MASK, 0);
         frame.setMask(pyr0);
+        mask = pyr0;
     }
     checkMask(mask, image.size());
 
@@ -193,6 +197,8 @@ void prepareICPFrameBase(OdometryFrame& frame, OdometrySettings settings)
         }
         else
             CV_Error(Error::StsBadSize, "Depth or pyramidDepth or pyramidCloud have to be set.");
+
+        frame.getDepth(depth);
     }
     checkDepth(depth, depth.size());
 
@@ -203,6 +209,7 @@ void prepareICPFrameBase(OdometryFrame& frame, OdometrySettings settings)
         TMat pyr0;
         frame.getPyramidAt(pyr0, OdometryFramePyramidType::PYR_MASK, 0);
         frame.setMask(pyr0);
+        mask = pyr0;
     }
     checkMask(mask, depth.size());
 
@@ -264,6 +271,7 @@ void prepareICPFrameDst(OdometryFrame& frame, OdometrySettings settings)
             TMat n0;
             frame.getPyramidAt(n0, OdometryFramePyramidType::PYR_NORM, 0);
             frame.setNormals(n0);
+            normals = n0;
         }
         else
         {
@@ -285,7 +293,6 @@ void prepareICPFrameDst(OdometryFrame& frame, OdometrySettings settings)
             normalsComputer->apply(c0, normals);
             frame.setNormals(normals);
         }
-
     }
 
     std::vector<TMat> npyramids;
