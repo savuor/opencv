@@ -43,10 +43,31 @@ class CV_EXPORTS_W Volume
     virtual int getVisibleBlocks(int /*currFrameId*/, int /*frameThreshold*/) const { return 1; }
     virtual size_t getTotalVolumeUnits() const { return 1; }
 
+    enum BoundingBoxPrecision
+    {
+        VOLUME_UNIT = 0,
+        VOXEL = 1
+    };
+    // Gets bounding box in volume coordinates with given precision:
+    // VOLUME_UNIT - up to volume unit
+    // VOXEL - up to voxel
+    // returns (min_x, min_y, min_z, max_x, max_y, max_z) in volume coordinates
+    virtual Vec6f getBoundingBox(int precision) const = 0;
+
+    // Enabels or disables new volume unit allocation during integration
+    // Applicable for HashTSDF only
+    virtual void setEnableGrowth(bool v) = 0;
+    // Returns if new volume units are allocated during integration or not
+    // Applicable for HashTSDF only
+    virtual bool getEnableGrowth() const = 0;
+
    public:
     const float voxelSize;
     const float voxelSizeInv;
-    const Affine3f pose;
+    //DEBUG
+    //const Affine3f pose;
+    Affine3f pose;
+
     const float raycastStepFactor;
 };
 

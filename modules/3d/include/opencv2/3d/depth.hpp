@@ -96,7 +96,7 @@ CV_EXPORTS_W void registerDepth(InputArray unregisteredCameraMatrix, InputArray 
 
 /**
  * @param depth the depth image
- * @param in_K
+ * @param in_K the intrinsic matrix
  * @param in_points the list of xy coordinates
  * @param points3d the resulting 3d points (point is represented by 4 chanels value [x, y, z, 0])
  */

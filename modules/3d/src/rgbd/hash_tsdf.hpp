@@ -25,6 +25,13 @@ class HashTSDFVolume : public Volume
     virtual int getVisibleBlocks(int currFrameId, int frameThreshold) const override = 0;
     virtual size_t getTotalVolumeUnits() const override = 0;
 
+    // Enabels or disables new volume unit allocation during integration
+    // Applicable for HashTSDF only
+    virtual void setEnableGrowth(bool v) CV_OVERRIDE;
+    // Returns if new volume units are allocated during integration or not
+    // Applicable for HashTSDF only
+    virtual bool getEnableGrowth() const CV_OVERRIDE;
+
    public:
     int maxWeight;
     float truncDist;
@@ -34,6 +41,7 @@ class HashTSDFVolume : public Volume
     float volumeUnitSize;
     bool zFirstMemOrder;
     Vec4i volStrides;
+    bool enableGrowth;
 };
 
 //template<typename T>

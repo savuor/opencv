@@ -55,6 +55,28 @@ ColoredTSDFVolume::ColoredTSDFVolume(float _voxelSize, Matx44f _pose, float _ray
     );
 }
 
+Vec6f ColoredTSDFVolume::getBoundingBox(int precision) const
+{
+    if (precision == BoundingBoxPrecision::VOXEL)
+    {
+        CV_Error(Error::StsNotImplemented, "This mode is not implemented yet");
+    }
+    else
+    {
+        const float mval = std::numeric_limits<float>::max();
+        Vec6f bb(0, 0, 0, volSize.x, volSize.y, volSize.z);
+
+        return bb;
+    }
+}
+
+void ColoredTSDFVolume::setEnableGrowth(bool /*v*/) { }
+
+bool ColoredTSDFVolume::getEnableGrowth() const
+{
+    return true;
+}
+
 class ColoredTSDFVolumeCPU : public ColoredTSDFVolume
 {
 public:

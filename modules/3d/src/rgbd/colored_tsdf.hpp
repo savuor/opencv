@@ -13,13 +13,26 @@ namespace cv
 
 class ColoredTSDFVolume : public Volume
 {
-   public:
+public:
     // dimension in voxels, size in meters
     ColoredTSDFVolume(float _voxelSize, Matx44f _pose, float _raycastStepFactor, float _truncDist,
                       int _maxWeight, Point3i _resolution, bool zFirstMemOrder = true);
     virtual ~ColoredTSDFVolume() = default;
 
-   public:
+public:
+
+    // Gets bounding box in volume coordinates with given precision:
+    // VOLUME_UNIT - up to volume unit
+    // VOXEL - up to voxel
+    // returns (min_x, min_y, min_z, max_x, max_y, max_z) in volume coordinates
+    virtual Vec6f getBoundingBox(int precision) const CV_OVERRIDE;
+
+    // Enabels or disables new volume unit allocation during integration
+    // Applicable for HashTSDF only
+    virtual void setEnableGrowth(bool v) CV_OVERRIDE;
+    // Returns if new volume units are allocated during integration or not
+    // Applicable for HashTSDF only
+    virtual bool getEnableGrowth() const CV_OVERRIDE;
 
     Point3i volResolution;
     WeightType maxWeight;
