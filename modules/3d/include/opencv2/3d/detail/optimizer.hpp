@@ -161,6 +161,7 @@ public:
     virtual size_t getEdgeStart(size_t i) const = 0;
     virtual size_t getEdgeEnd(size_t i) const = 0;
     virtual Affine3d getEdgePose(size_t i) const = 0;
+    virtual void setEdgePose(size_t i, Affine3d pose) = 0;
     virtual Matx66f getEdgeInfo(size_t i) const = 0;
     virtual size_t getNumEdges() const = 0;
 

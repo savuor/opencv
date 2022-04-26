@@ -297,8 +297,6 @@ void HashTSDFVolumeCPU::integrate(InputArray _depth, float depthFactor, const Ma
         {
             VolumeUnit& vu = this->volumeUnits.emplace(idx, VolumeUnit()).first->second;
 
-            //DEBUG
-            //Matx44f subvolumePose = pose.translate(volumeUnitIdxToVolume(idx)).matrix;
             Matx44f subvolumePose = pose.translate(pose.rotation() * volumeUnitIdxToVolume(idx)).matrix;
 
             vu.pose = subvolumePose;

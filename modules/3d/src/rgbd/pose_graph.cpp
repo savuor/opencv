@@ -480,6 +480,12 @@ public:
     {
         return edges[i].pose.getAffine();
     }
+
+    virtual void setEdgePose(size_t i, Affine3d pose) CV_OVERRIDE
+    {
+        edges[i].pose = Pose3d(pose.matrix);
+    }
+
     virtual Matx66f getEdgeInfo(size_t i) const CV_OVERRIDE
     {
         Matx66f s = edges[i].sqrtInfo;
