@@ -22,12 +22,14 @@ enum
     UTSIZE = 27
 };
 
+//TODO: rewrite to TMat
 void prepareRGBDFrame(OdometryFrame& srcFrame, OdometryFrame& dstFrame, OdometrySettings settings, OdometryAlgoType algtype)
 {
     prepareRGBFrame(srcFrame, dstFrame, settings, true);
     prepareICPFrame(srcFrame, dstFrame, settings, algtype);
 }
 
+//TODO: rewrite to TMat
 void prepareRGBFrame(OdometryFrame& srcFrame, OdometryFrame& dstFrame, OdometrySettings settings, bool useDepth)
 {
     prepareRGBFrameBase(srcFrame, settings, useDepth);
@@ -37,6 +39,7 @@ void prepareRGBFrame(OdometryFrame& srcFrame, OdometryFrame& dstFrame, OdometryS
     prepareRGBFrameDst(dstFrame, settings);
 }
 
+//TODO: rewrite to TMat
 void prepareICPFrame(OdometryFrame& srcFrame, OdometryFrame& dstFrame, OdometrySettings settings, OdometryAlgoType algtype)
 {
     prepareICPFrameBase(srcFrame, settings);
@@ -48,13 +51,10 @@ void prepareICPFrame(OdometryFrame& srcFrame, OdometryFrame& dstFrame, OdometryS
     prepareICPFrameDst(dstFrame, settings);
 }
 
+//TODO: remove this comment, compatible with TMat
+template<typename TMat>
 void prepareRGBFrameBase(OdometryFrame& frame, OdometrySettings settings, bool useDepth)
 {
-    // Can be transformed into template argument in the future
-    // when this algorithm supports OCL UMats too
-
-    typedef Mat TMat;
-
     TMat image;
     frame.getGrayImage(image);
     if (image.empty())
@@ -111,11 +111,16 @@ void prepareRGBFrameBase(OdometryFrame& frame, OdometrySettings settings, bool u
     }
     checkMask(mask, image.size());
 
+    //TODO: check if this compiles & works
+    std::vector<int> iterCounts;
+    settings.getIterCounts(iterCounts);
+    /*
     std::vector<int> iterCounts;
     Mat miterCounts;
     settings.getIterCounts(miterCounts);
     for (int i = 0; i < miterCounts.size().height; i++)
         iterCounts.push_back(miterCounts.at<int>(i));
+    */
 
     std::vector<TMat> ipyramids;
     preparePyramidImage(image, ipyramids, iterCounts.size());
@@ -131,10 +136,10 @@ void prepareRGBFrameBase(OdometryFrame& frame, OdometrySettings settings, bool u
     setPyramids(frame, OdometryFramePyramidType::PYR_MASK, mpyramids);
 }
 
+//TODO: remove this comment, compatible with TMat
+template<typename TMat>
 void prepareRGBFrameSrc(OdometryFrame& frame, OdometrySettings settings)
 {
-    typedef Mat TMat;
-
     std::vector<TMat> dpyramids(frame.getPyramidLevels(OdometryFramePyramidType::PYR_DEPTH));
     getPyramids(frame, OdometryFramePyramidType::PYR_DEPTH, dpyramids);
     std::vector<TMat> mpyramids(frame.getPyramidLevels(OdometryFramePyramidType::PYR_MASK));
@@ -148,10 +153,10 @@ void prepareRGBFrameSrc(OdometryFrame& frame, OdometrySettings settings)
     setPyramids(frame, OdometryFramePyramidType::PYR_CLOUD, cpyramids);
 }
 
+//TODO: remove this comment, compatible with TMat
+template<typename TMat>
 void prepareRGBFrameDst(OdometryFrame& frame, OdometrySettings settings)
 {
-    typedef Mat TMat;
-
     std::vector<TMat> ipyramids(frame.getPyramidLevels(OdometryFramePyramidType::PYR_IMAGE));
     getPyramids(frame, OdometryFramePyramidType::PYR_IMAGE, ipyramids);
     std::vector<TMat> mpyramids(frame.getPyramidLevels(OdometryFramePyramidType::PYR_MASK));
@@ -159,26 +164,31 @@ void prepareRGBFrameDst(OdometryFrame& frame, OdometrySettings settings)
 
     std::vector<TMat> dxpyramids, dypyramids, tmpyramids;
 
+    //TODO: check if it compiles & works
+    std::vector<float> minGradientMagnitudes;
+    settings.getMinGradientMagnitudes(minGradientMagnitudes);
+    /*
     Mat _minGradientMagnitudes;
     std::vector<float> minGradientMagnitudes;
     settings.getMinGradientMagnitudes(_minGradientMagnitudes);
     for (int i = 0; i < _minGradientMagnitudes.size().height; i++)
         minGradientMagnitudes.push_back(_minGradientMagnitudes.at<float>(i));
+    */
 
     preparePyramidSobel<TMat>(ipyramids, 1, 0, dxpyramids, settings.getSobelSize());
     preparePyramidSobel<TMat>(ipyramids, 0, 1, dypyramids, settings.getSobelSize());
     preparePyramidTexturedMask(dxpyramids, dypyramids, minGradientMagnitudes,
-        mpyramids, settings.getMaxPointsPart(), tmpyramids, settings.getSobelScale());
+                               mpyramids, settings.getMaxPointsPart(), tmpyramids, settings.getSobelScale());
 
     setPyramids(frame, OdometryFramePyramidType::PYR_DIX, dxpyramids);
     setPyramids(frame, OdometryFramePyramidType::PYR_DIY, dypyramids);
     setPyramids(frame, OdometryFramePyramidType::PYR_TEXMASK, tmpyramids);
 }
 
+//TODO: remove this comment, compatible with TMat
+template<typename TMat>
 void prepareICPFrameBase(OdometryFrame& frame, OdometrySettings settings)
 {
-    typedef Mat TMat;
-
     TMat depth;
     frame.getScaledDepth(depth);
     if (depth.empty())
@@ -216,6 +226,7 @@ void prepareICPFrameBase(OdometryFrame& frame, OdometrySettings settings)
     }
     checkMask(mask, depth.size());
 
+    //TODO: remove that Mat also
     std::vector<int> iterCounts;
     Mat miterCounts;
     settings.getIterCounts(miterCounts);
@@ -237,10 +248,10 @@ void prepareICPFrameBase(OdometryFrame& frame, OdometrySettings settings)
     setPyramids(frame, OdometryFramePyramidType::PYR_CLOUD, cpyramids);
 }
 
+//TODO: remove this comment, compatible with TMat
+template<typename TMat>
 void prepareICPFrameSrc(OdometryFrame& frame, OdometrySettings settings)
 {
-    typedef Mat TMat;
-
     TMat mask;
     frame.getMask(mask);
 
@@ -250,14 +261,14 @@ void prepareICPFrameSrc(OdometryFrame& frame, OdometrySettings settings)
     std::vector<TMat> mpyramids;
     std::vector<TMat> npyramids;
     preparePyramidMask<TMat>(mask, dpyramids, settings.getMinDepth(), settings.getMaxDepth(),
-        npyramids, mpyramids);
+                             npyramids, mpyramids);
     setPyramids(frame, OdometryFramePyramidType::PYR_MASK, mpyramids);
 }
 
+//TODO: remove this comment, compatible with TMat
+template<typename TMat>
 void prepareICPFrameDst(OdometryFrame& frame, OdometrySettings settings)
 {
-    typedef Mat TMat;
-
     Ptr<RgbdNormals> normalsComputer;
     Matx33f cameraMatrix;
     settings.getCameraMatrix(cameraMatrix);
@@ -315,32 +326,43 @@ void prepareICPFrameDst(OdometryFrame& frame, OdometrySettings settings)
     setPyramids(frame, OdometryFramePyramidType::PYR_NORMMASK, nmpyramids);
 }
 
+//TODO: remove this comment, compatible with TMat
+template<typename TMat>
 void setPyramids(OdometryFrame& odf, OdometryFramePyramidType oftype, InputArrayOfArrays pyramidImage)
 {
     size_t nLevels = pyramidImage.size(-1).width;
-    std::vector<Mat> pyramids;
-    pyramidImage.getMatVector(pyramids);
+    //TODO: check if this compiles & works
+    for (size_t l = 0; l < nLevels; l++)
+    {
+        odf.setPyramidAt(getTMat<TMat>(pyramidImage, l), oftype, l);
+    }
+    /*
+    std::vector<TMat> pyramids;
+    for (size_t l = 0; l < nLevels; l++)
+        pyramids.push_back(getTMat<TMat>(pyramidImage, l));
     odf.setPyramidLevel(nLevels, oftype);
     for (size_t l = 0; l < nLevels; l++)
     {
         odf.setPyramidAt(pyramids[l], oftype, l);
     }
+    */
 }
 
+//TODO: remove this comment, compatible with TMat
+template<typename TMat>
 void getPyramids(OdometryFrame& odf, OdometryFramePyramidType oftype, OutputArrayOfArrays _pyramid)
 {
-    typedef Mat TMat;
-
     size_t nLevels = odf.getPyramidLevels(oftype);
     for (size_t l = 0; l < nLevels; l++)
     {
         TMat img;
         odf.getPyramidAt(img, oftype, l);
-        TMat& p = _pyramid.getMatRef(int(l));
+        TMat& p = getTMatRef<TMat>(_pyramid, int(l));
         img.copyTo(p);
     }
 }
 
+//TODO: remove this comment, compatible with TMat
 void preparePyramidImage(InputArray image, InputOutputArrayOfArrays pyramidImage, size_t levelCount)
 {
     if (!pyramidImage.empty())
@@ -357,6 +379,7 @@ void preparePyramidImage(InputArray image, InputOutputArrayOfArrays pyramidImage
         buildPyramid(image, pyramidImage, (int)levelCount - 1);
 }
 
+//TODO: remove this comment, compatible with TMat
 template<typename TMat>
 void preparePyramidMask(InputArray mask, InputArrayOfArrays pyramidDepth, float minDepth, float maxDepth,
                         InputArrayOfArrays pyramidNormal,
@@ -420,6 +443,7 @@ void preparePyramidMask(InputArray mask, InputArrayOfArrays pyramidDepth, float 
     }
 }
 
+//TODO: remove this comment, compatible with TMat
 template<typename TMat>
 void preparePyramidCloud(InputArrayOfArrays pyramidDepth, const Matx33f& cameraMatrix, InputOutputArrayOfArrays pyramidCloud)
 {
@@ -464,7 +488,7 @@ void buildPyramidCameraMatrix(const Matx33f& cameraMatrix, int levels, std::vect
     }
 }
 
-
+//TODO: remove this comment, compatible with TMat
 template<typename TMat>
 void preparePyramidSobel(InputArrayOfArrays pyramidImage, int dx, int dy, InputOutputArrayOfArrays pyramidSobel, int sobelSize)
 {
@@ -491,6 +515,8 @@ void preparePyramidSobel(InputArrayOfArrays pyramidImage, int dx, int dy, InputO
     }
 }
 
+//TODO: remove this comment, almost compatible with TMat
+template<typename TMat>
 void preparePyramidTexturedMask(InputArrayOfArrays pyramid_dI_dx, InputArrayOfArrays pyramid_dI_dy,
                                 InputArray minGradMagnitudes, InputArrayOfArrays pyramidMask, double maxPointsPart,
                                 InputOutputArrayOfArrays pyramidTexturedMask, double sobelScale)
@@ -518,31 +544,47 @@ void preparePyramidTexturedMask(InputArrayOfArrays pyramid_dI_dx, InputArrayOfAr
         for (size_t i = 0; i < didxLevels; i++)
         {
             const float minScaledGradMagnitude2 = mgMags((int)i) * mgMags((int)i) * sobelScale2_inv;
-            const Mat& dIdx = pyramid_dI_dx.getMat((int)i);
-            const Mat& dIdy = pyramid_dI_dy.getMat((int)i);
 
+            const TMat dIdx = getTMat<TMat>(pyramid_dI_dx, (int)i);
+            const TMat dIdy = getTMat<TMat>(pyramid_dI_dy, (int)i);
+
+            //TODO: rewrite to TMat with cv::magnitude
             Mat texturedMask(dIdx.size(), CV_8UC1, Scalar(0));
+            Mat dIdxm, dIdym;
+            dIdx.copyTo(dIdxm); dIdy.copyTo(dIdym);
 
-            for (int y = 0; y < dIdx.rows; y++)
+            //TODO: try this instead of the code below
+            /*
+            Mat magnitudes;
+            cv::magnitude(dIdx, dIdy, magnitudes);
+            texturedMask = magnitudes >= Scalar(minScaledGradMagnitude2);
+            */
+
+            for (int y = 0; y < dIdxm.rows; y++)
             {
-                const short* dIdx_row = dIdx.ptr<short>(y);
-                const short* dIdy_row = dIdy.ptr<short>(y);
+                const short* dIdx_row = dIdxm.ptr<short>(y);
+                const short* dIdy_row = dIdym.ptr<short>(y);
                 uchar* texturedMask_row = texturedMask.ptr<uchar>(y);
-                for (int x = 0; x < dIdx.cols; x++)
+                for (int x = 0; x < dIdxm.cols; x++)
                 {
                     float magnitude2 = static_cast<float>(dIdx_row[x] * dIdx_row[x] + dIdy_row[x] * dIdy_row[x]);
                     if (magnitude2 >= minScaledGradMagnitude2)
                         texturedMask_row[x] = 255;
                 }
             }
-            Mat texMask = texturedMask & pyramidMask.getMat((int)i);
+            TMat pyramidMask = getTMat<TMat>(pyramidMask, (int)i);
+            Mat pyramidMaskM;
+            pyramidMask.copyTo(pyramidMaskM);
+            Mat texMask = texturedMask & pyramidMaskM;
 
             randomSubsetOfMask(texMask, (float)maxPointsPart);
-            pyramidTexturedMask.getMatRef((int)i) = texMask;
+            texMask.copyTo(getTMat<TMat>(pyramidTexturedMask, (int)i));
         }
     }
 }
 
+//TODO: remove this comment, almost compatible with TMat
+template<typename TMat>
 void randomSubsetOfMask(InputOutputArray _mask, float part)
 {
     const int minPointsCount = 1000; // minimum point count (we can process them fast)
@@ -551,7 +593,9 @@ void randomSubsetOfMask(InputOutputArray _mask, float part)
     if (needCount < nonzeros)
     {
         RNG rng;
-        Mat mask = _mask.getMat();
+        TMat maskT = getTMat<TMat>(_mask);
+        Mat mask;
+        maskT.copyTo(mask);
         Mat subset(mask.size(), CV_8UC1, Scalar(0));
 
         int subsetSize = 0;
@@ -570,6 +614,8 @@ void randomSubsetOfMask(InputOutputArray _mask, float part)
     }
 }
 
+//TODO: remove this comment, almost compatible with TMat
+template<typename TMat>
 void preparePyramidNormals(InputArray normals, InputArrayOfArrays pyramidDepth, InputOutputArrayOfArrays pyramidNormals)
 {
     size_t depthLevels = pyramidDepth.size(-1).width;
@@ -591,7 +637,11 @@ void preparePyramidNormals(InputArray normals, InputArrayOfArrays pyramidDepth, 
         // renormalize normals
         for (size_t i = 1; i < depthLevels; i++)
         {
-            Mat& currNormals = pyramidNormals.getMatRef((int)i);
+            //TODO: rewrite to TMats
+            TMat& currNormalsT = getTMatRef<TMat>(pyramidNormals, (int)i);
+            Mat currNormals;
+            currNormalsT.copyTo(currNormals);
+
             for (int y = 0; y < currNormals.rows; y++)
             {
                 Point3f* normals_row = currNormals.ptr<Point3f>(y);
@@ -601,10 +651,14 @@ void preparePyramidNormals(InputArray normals, InputArrayOfArrays pyramidDepth, 
                     normals_row[x] *= 1. / nrm;
                 }
             }
+
+            currNormals.copyTo(currNormalsT);
         }
     }
 }
 
+//TODO: rewrite to TMat
+template<typename TMat>
 void preparePyramidNormalsMask(InputArray pyramidNormals, InputArray pyramidMask, double maxPointsPart,
                                InputOutputArrayOfArrays /*std::vector<Mat>&*/ pyramidNormalsMask)
 {
@@ -626,6 +680,8 @@ void preparePyramidNormalsMask(InputArray pyramidNormals, InputArray pyramidMask
         pyramidNormalsMask.create((int)maskLevels, 1, CV_8U, -1);
         for (size_t i = 0; i < maskLevels; i++)
         {
+
+            
             Mat& normalsMask = pyramidNormalsMask.getMatRef((int)i);
             normalsMask = pyramidMask.getMat((int)i).clone();
 
@@ -648,6 +704,7 @@ void preparePyramidNormalsMask(InputArray pyramidNormals, InputArray pyramidMask
     }
 }
 
+//TODO: rewrite to TMat
 bool RGBDICPOdometryImpl(OutputArray _Rt, const Mat& initRt,
                          const OdometryFrame srcFrame,
                          const OdometryFrame dstFrame,
@@ -818,6 +875,8 @@ bool RGBDICPOdometryImpl(OutputArray _Rt, const Mat& initRt,
     return isOk;
 }
 
+//TODO: rewrite to TMat
+
 // Rotate dst by RtInv to get corresponding src pixels
 // In RGB case compute sigma and diffs too
 void computeCorresps(const Matx33f& _K, const Mat& rt,
@@ -962,6 +1021,7 @@ void computeCorresps(const Matx33f& _K, const Mat& rt,
     }
 }
 
+//TODO: rewrite to TMat
 void calcRgbdLsmMatrices(const Mat& cloud0, const Mat& Rt,
                          const Mat& dI_dx1, const Mat& dI_dy1,
                          const Mat& corresps, const Mat& _diffs, const double _sigma,
@@ -1019,7 +1079,8 @@ void calcRgbdLsmMatrices(const Mat& cloud0, const Mat& Rt,
             AtA.at<double>(x, y) = AtA.at<double>(y, x);
 }
 
-
+//TODO: rewrite to TMat
+//TODO: remove this comment, compatible with TMat
 void calcICPLsmMatrices(const Mat& cloud0, const Mat& Rt,
                         const Mat& cloud1, const Mat& normals1,
                         const Mat& corresps,
@@ -1481,8 +1542,9 @@ struct GetAbInvoker : ParallelLoopBody
     float minCos;
 };
 
+//TODO: rewrite to TMat
 void calcICPLsmMatricesFast(Matx33f cameraMatrix, const Mat& oldPts, const Mat& oldNrm, const Mat& newPts, const Mat& newNrm,
-    cv::Affine3f pose, int level, float maxDepthDiff, float angleThreshold, cv::Matx66f& A, cv::Vec6f& b)
+                            cv::Affine3f pose, int level, float maxDepthDiff, float angleThreshold, cv::Matx66f& A, cv::Vec6f& b)
 {
     CV_Assert(oldPts.size() == oldNrm.size());
     CV_Assert(newPts.size() == newNrm.size());
@@ -1574,7 +1636,7 @@ bool ocl_calcICPLsmMatricesFast(Matx33f cameraMatrix, const UMat& oldPts, const 
 
     UMat& groupedSumGpu = groupedSumBuffer;
     groupedSumGpu.create(Size(ngroups.width * UTSIZE, ngroups.height),
-        CV_32F);
+                         CV_32F);
     groupedSumGpu.setTo(0);
 
     // TODO: optimization possible:

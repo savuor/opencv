@@ -111,8 +111,14 @@ void OdometryFrame::getPyramidAt(OutputArray img, OdometryFramePyramidType pyrTy
 }
 
 template<typename TMat>
-OdometryFrameImplTMat<TMat>::OdometryFrameImplTMat()
-    : pyramids(OdometryFramePyramidType::N_PYRAMIDS)
+OdometryFrameImplTMat<TMat>::OdometryFrameImplTMat() :
+    image(),
+    imageGray(),
+    depth(),
+    scaledDepth(),
+    mask(),
+    normals(),
+    pyramids(OdometryFramePyramidType::N_PYRAMIDS)
 {
 };
 

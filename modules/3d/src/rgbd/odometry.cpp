@@ -82,6 +82,7 @@ bool OdometryICP::compute(const OdometryFrame& srcFrame, const OdometryFrame& ds
     std::vector<int> iterCounts;
     Mat miterCounts;
     settings.getIterCounts(miterCounts);
+    CV_CheckTypeEQ(miterCounts.type(), CV_32S, "");
     for (int i = 0; i < miterCounts.size().height; i++)
         iterCounts.push_back(miterCounts.at<int>(i));
     bool isCorrect = RGBDICPOdometryImpl(Rt, Mat(), srcFrame, dstFrame, cameraMatrix,
@@ -241,6 +242,7 @@ bool OdometryRGBD::compute(const OdometryFrame& srcFrame, const OdometryFrame& d
     std::vector<int> iterCounts;
     Mat miterCounts;
     settings.getIterCounts(miterCounts);
+    CV_CheckTypeEQ(miterCounts.type(), CV_32S, "");
     for (int i = 0; i < miterCounts.size().height; i++)
         iterCounts.push_back(miterCounts.at<int>(i));
     bool isCorrect = RGBDICPOdometryImpl(Rt, Mat(), srcFrame, dstFrame, cameraMatrix,

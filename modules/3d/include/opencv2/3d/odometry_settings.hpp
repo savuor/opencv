@@ -14,6 +14,7 @@ class CV_EXPORTS_W OdometrySettings
 {
 public:
     OdometrySettings();
+    //TODO: proper copy constructor
     ~OdometrySettings() {};
     void setCameraMatrix(InputArray val);
     void getCameraMatrix(OutputArray val) const;

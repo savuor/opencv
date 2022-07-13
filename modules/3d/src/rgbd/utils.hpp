@@ -112,10 +112,13 @@ Mat getTMat<Mat>(InputArray a, int i);
 template<>
 UMat getTMat<UMat>(InputArray a, int i);
 
+//TODO: review the code maybe to remove these functions
 template<typename TMat>
 inline TMat& getTMatRef(InputOutputArray, int = -1);
 template<>
 Mat& getTMatRef<Mat>(InputOutputArray a, int i);
+template<>
+UMat& getTMatRef<UMat>(InputOutputArray a, int i);
 
 inline size_t roundDownPow2(size_t x)
 {
