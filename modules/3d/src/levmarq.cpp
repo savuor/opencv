@@ -300,10 +300,10 @@ LevMarq::Report detail::LevMarqBase::optimize()
                     lambdaLevMarq *= 1.0 / settings.initialLmDownFactor;
                 lmUpFactor = settings.initialLmUpFactor;
 
-                smallGradient = (gradientMax < settings.minGradientTolerance);
-                smallStep = (xNorm < settings.stepNormTolerance);
-                smallEnergyDelta = (costChange / energy < settings.relEnergyDeltaTolerance);
-                smallEnergy = (energy < settings.smallEnergyTolerance);
+                smallGradient    = (settings.checkMinGradient && (gradientMax < settings.minGradientTolerance));
+                smallStep        = (settings.checkStepNorm && (xNorm < settings.stepNormTolerance));
+                smallEnergyDelta = (settings.checkRelEnergyChange && (costChange / energy < settings.relEnergyDeltaTolerance));
+                smallEnergy      = (energy < settings.smallEnergyTolerance);
 
                 backend->acceptProbe();
 
