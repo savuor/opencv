@@ -301,6 +301,7 @@ void prepareICPFrameDst(OdometryFrame& frame, OdometrySettings settings)
                     depth.depth(),
                     cameraMatrix,
                     normalWinSize,
+                    50.f,
                     normalMethod);
             TMat c0;
             frame.getPyramidAt(c0, OdometryFramePyramidType::PYR_CLOUD, 0);
@@ -994,7 +995,7 @@ void computeCorresps(const Matx33f& _K, const Mat& rt,
 
     _corresps.create(correspCount, 1, CV_32SC4);
     Vec4i* corresps_ptr = _corresps.ptr<Vec4i>();
-    float* diffs_ptr;
+    float* diffs_ptr = nullptr;
     if (method == OdometryType::RGB)
     {
         _diffs.create(correspCount, 1, CV_32F);
@@ -1003,7 +1004,7 @@ void computeCorresps(const Matx33f& _K, const Mat& rt,
     for (int vsrc = 0, i = 0; vsrc < corresps.rows; vsrc++)
     {
         const Vec2s* corresps_row = corresps.ptr<Vec2s>(vsrc);
-        const float* diffs_row;
+        const float* diffs_row = nullptr;
         if (method == OdometryType::RGB)
             diffs_row = diffs.ptr<float>(vsrc);
         for (int usrc = 0; usrc < corresps.cols; usrc++)
