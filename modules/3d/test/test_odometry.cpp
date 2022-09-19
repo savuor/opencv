@@ -7,7 +7,7 @@
 namespace opencv_test { namespace {
 
 static
-void dilateFrame(Mat& image, Mat& depth)
+void dilateFrame(Mat& image, Mat& depth, float depthThreshold)
 {
     CV_Assert(!image.empty());
     CV_Assert(image.type() == CV_8UC1);
@@ -19,8 +19,11 @@ void dilateFrame(Mat& image, Mat& depth)
     Mat mask(image.size(), CV_8UC1, Scalar(255));
     for(int y = 0; y < depth.rows; y++)
         for(int x = 0; x < depth.cols; x++)
-            if(cvIsNaN(depth.at<float>(y,x)) || depth.at<float>(y,x) > 10 || depth.at<float>(y,x) <= FLT_EPSILON)
-                mask.at<uchar>(y,x) = 0;
+        {
+            float v = depth.at<float>(y, x);
+            if(cvIsNaN(v) || v > depthThreshold || v <= FLT_EPSILON)
+                mask.at<uchar>(y, x) = 0;
+        }
 
     image.setTo(255, ~mask);
     Mat minImage;
@@ -65,7 +68,10 @@ public:
         idError(_idError)
     { }
 
-    void readData(Mat& image, Mat& depth) const;
+    //DEBUG
+    //void readData(Mat& image, Mat& depth) const;
+    void readData(Mat& image, Mat& depth_big, Mat& depth_scaled) const;
+
     static Mat getCameraMatrix()
     {
         float fx = 525.0f, // default
@@ -91,14 +97,16 @@ public:
 };
 
 
-void OdometryTest::readData(Mat& image, Mat& depth) const
+//DEBUG
+//void OdometryTest::readData(Mat& image, Mat& depth) const
+void OdometryTest::readData(Mat& image, Mat& depth_big, Mat& depth_scaled) const
 {
     std::string dataPath = cvtest::TS::ptr()->get_data_path();
     std::string imageFilename = dataPath + "/cv/rgbd/rgb.png";
     std::string depthFilename = dataPath + "/cv/rgbd/depth.png";
 
     image = imread(imageFilename,  0);
-    depth = imread(depthFilename, -1);
+    Mat depth = imread(depthFilename, -1);
 
     ASSERT_FALSE(image.empty()) << "Image " << imageFilename.c_str() << " can not be read" << std::endl;
     ASSERT_FALSE(depth.empty()) << "Depth " << depthFilename.c_str() << "can not be read" << std::endl;
@@ -106,10 +114,16 @@ void OdometryTest::readData(Mat& image, Mat& depth) const
     CV_DbgAssert(image.type() == CV_8UC1);
     CV_DbgAssert(depth.type() == CV_16UC1);
     {
-        Mat depth_flt;
-        depth.convertTo(depth_flt, CV_32FC1, 1.f/5000.f);
-        depth_flt.setTo(std::numeric_limits<float>::quiet_NaN(), depth_flt < FLT_EPSILON);
-        depth = depth_flt;
+        Mat depth_flt_scaled, depth_flt_big;
+        
+        //DEBUG
+        depth.convertTo(depth_flt_scaled, CV_32FC1, 1.f/5000.f);
+        depth.convertTo(depth_flt_big, CV_32FC1, 1.f);
+
+        depth_flt_scaled.setTo(std::numeric_limits<float>::quiet_NaN(), depth_flt_scaled < FLT_EPSILON);
+        depth_flt_big.setTo(std::numeric_limits<float>::quiet_NaN(), depth_flt_big < FLT_EPSILON);
+        depth_scaled = depth_flt_scaled;
+        depth_big = depth_flt_big;
     }
 }
 
@@ -133,8 +147,11 @@ void OdometryTest::checkUMats()
 {
     Mat K = getCameraMatrix();
 
-    Mat image, depth;
-    readData(image, depth);
+    //DEBUG
+    //Mat image, depth;
+    //readData(image, depth);
+    Mat image, depth, dummy;
+    readData(image, depth, dummy);
 
     OdometrySettings ods;
     ods.setCameraMatrix(K);
@@ -158,14 +175,33 @@ void OdometryTest::checkUMats()
     ASSERT_FALSE(diff > idError) << "Incorrect transformation between the same frame (not the identity matrix), diff = " << diff << std::endl;
 }
 
+
 void OdometryTest::run()
 {
+
+    //DEBUG
+    const bool doScaleDown = false;
+
     Mat K = getCameraMatrix();
 
-    Mat image, depth;
-    readData(image, depth);
+    //DEBUG
+    //readData(image, depth);
+    Mat image;
+    Mat depthScaled, depthBig;
+    readData(image, depthBig, depthScaled);
+    Mat depth = doScaleDown ? depthScaled : depthBig;
+
     OdometrySettings ods;
     ods.setCameraMatrix(K);
+
+    //DEBUG
+    float depthScale = doScaleDown ? 1.f : 5000.f;
+    //ods.setMaxDepth(4.0f * depthScale);
+    ods.setMaxDepth(10.f * depthScale);
+    ods.setMaxTranslation(0.15f * depthScale);
+    // TODO: investigate why FastICP does not work with that
+    ods.setMaxDepthDiff(0.07f * depthScale);
+
     Odometry odometry = Odometry(otype, ods, algtype);
     OdometryFrame odf = odometry.createOdometryFrame();
     odf.setImage(image);
@@ -175,12 +211,18 @@ void OdometryTest::run()
     // 1. Try to find Rt between the same frame (try masks also).
     Mat mask(image.size(), CV_8UC1, Scalar(255));
 
+    bool isComputed;
+
+    //DEBUG
+    
     odometry.prepareFrame(odf);
-    bool isComputed = odometry.compute(odf, odf, calcRt);
+    isComputed = odometry.compute(odf, odf, calcRt);
 
     ASSERT_TRUE(isComputed) << "Can not find Rt between the same frame" << std::endl;
     double ndiff = cv::norm(calcRt, Mat::eye(4,4,CV_64FC1));
+    
     ASSERT_FALSE(ndiff > idError) << "Incorrect transformation between the same frame (not the identity matrix), diff = " << ndiff << std::endl;
+    
 
     // 2. Generate random rigid body motion in some ranges several times (iterCount).
     // On each iteration an input frame is warped using generated transformation.
@@ -193,14 +235,33 @@ void OdometryTest::run()
     int better_5times_count = 0;
     for (int iter = 0; iter < iterCount; iter++)
     {
+        //TODO: if scaled then change change translation:
+        //    double depthScaleCoeff = scaleDown ? ( depthType == CV_16U ? 1.          : 1./depthFactor ) :    1.;
+        //    double transScaleCoeff = scaleDown ? ( depthType == CV_16U ? depthFactor : 1.             ) : depthFactor;
+        //rt = cv::Affine3d(cv::Vec3d(0.1, 0.2, 0.3), tr * transScaleCoeff);
+
         Mat rvec, tvec;
         generateRandomTransformation(rvec, tvec);
-        Affine3d rt(rvec, tvec);
+        Affine3d rtBig(rvec, Mat(tvec * 5000.f));
+        Affine3d rtScaled(rvec, tvec);
 
-        Mat warpedImage, warpedDepth;
+        Mat warpedImageBig, warpedDepthBig;
 
-        warpFrame(depth, image, noArray(), rt.matrix, K, warpedDepth, warpedImage);
-        dilateFrame(warpedImage, warpedDepth); // due to inaccuracy after warping
+        //TODO: scale translation for unscaled image
+
+        // ods.getMaxDepth()
+        warpFrame(depthBig, image, noArray(), rtBig.matrix, K, warpedDepthBig, warpedImageBig);
+
+        Mat warpedImageScaled, warpedDepthScaled;
+
+        warpFrame(depthScaled, image, noArray(), rtScaled.matrix, K, warpedDepthScaled, warpedImageScaled);
+
+        //DEBUG
+        Mat warpedImage = doScaleDown ? warpedImageScaled : warpedImageBig;
+        Mat warpedDepth = doScaleDown ? warpedDepthScaled : warpedDepthBig;
+
+        //DEBUG
+        dilateFrame(warpedImage, warpedDepth, ods.getMaxDepth()); // due to inaccuracy after warping
 
         OdometryFrame odfSrc = odometry.createOdometryFrame();
         OdometryFrame odfDst = odometry.createOdometryFrame();
@@ -275,8 +336,13 @@ void OdometryTest::prepareFrameCheck()
 {
     Mat K = getCameraMatrix();
 
-    Mat image, depth;
-    readData(image, depth);
+    //DEBUG
+    //Mat image, depth;
+    //readData(image, depth);
+    Mat image, depth, dummy;
+    readData(image, depth, dummy);
+    
+
     OdometrySettings ods;
     ods.setCameraMatrix(K);
     Odometry odometry = Odometry(otype, ods, algtype);

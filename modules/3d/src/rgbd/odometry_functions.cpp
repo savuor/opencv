@@ -302,7 +302,9 @@ void prepareICPFrameDst(OdometryFrame& frame, OdometrySettings settings)
                     cameraMatrix,
                     normalWinSize,
                     50.f,
+                    //DEBUG
                     normalMethod);
+                    //cv::RgbdNormals::RGBD_NORMALS_METHOD_CROSS_PRODUCT);
             TMat c0;
             frame.getPyramidAt(c0, OdometryFramePyramidType::PYR_CLOUD, 0);
             normalsComputer->apply(c0, normals);
@@ -573,9 +575,9 @@ void preparePyramidTexturedMask(InputArrayOfArrays pyramid_dI_dx, InputArrayOfAr
                         texturedMask_row[x] = 255;
                 }
             }
-            TMat pyramidMask = getTMat<TMat>(pyramidMask, (int)i);
+            TMat pyramidMaskT = getTMat<TMat>(pyramidMask, (int)i);
             Mat pyramidMaskM;
-            pyramidMask.copyTo(pyramidMaskM);
+            pyramidMaskT.copyTo(pyramidMaskM);
             Mat texMask = texturedMask & pyramidMaskM;
 
             randomSubsetOfMask(texMask, (float)maxPointsPart);
@@ -658,10 +660,10 @@ void preparePyramidNormals(InputArray normals, InputArrayOfArrays pyramidDepth, 
     }
 }
 
-//TODO: rewrite to TMat
+//TODO: remove this comment, almost compatible with TMat
 template<typename TMat>
 void preparePyramidNormalsMask(InputArray pyramidNormals, InputArray pyramidMask, double maxPointsPart,
-                               InputOutputArrayOfArrays /*std::vector<Mat>&*/ pyramidNormalsMask)
+                               InputOutputArrayOfArrays pyramidNormalsMask)
 {
     size_t maskLevels = pyramidMask.size(-1).width;
     size_t norMaskLevels = pyramidNormalsMask.size(-1).width;
@@ -681,16 +683,18 @@ void preparePyramidNormalsMask(InputArray pyramidNormals, InputArray pyramidMask
         pyramidNormalsMask.create((int)maskLevels, 1, CV_8U, -1);
         for (size_t i = 0; i < maskLevels; i++)
         {
+            TMat& normalsMask = getTMatRef(pyramidNormalsMask, (int)i);
+            normalsMask = pyramidMask.getTMat((int)i).clone();
 
-            
-            Mat& normalsMask = pyramidNormalsMask.getMatRef((int)i);
-            normalsMask = pyramidMask.getMat((int)i).clone();
+            const TMat normals = getTMat(pyramidNormals, (int)i);
+            Mat normalsCpu, normalsMaskCpu;
+            normals.copyTo(normalsCpu);
+            normalsMask.copyTo(normalsMaskCpu);
 
-            const Mat normals = pyramidNormals.getMat((int)i);
             for (int y = 0; y < normalsMask.rows; y++)
             {
-                const Vec4f* normals_row = normals.ptr<Vec4f>(y);
-                uchar* normalsMask_row = normalsMask.ptr<uchar>(y);
+                const Vec4f* normals_row = normalsCpu.ptr<Vec4f>(y);
+                uchar* normalsMask_row = normalsMaskCpu.ptr<uchar>(y);
                 for (int x = 0; x < normalsMask.cols; x++)
                 {
                     Vec4f n = normals_row[x];
@@ -700,12 +704,15 @@ void preparePyramidNormalsMask(InputArray pyramidNormals, InputArray pyramidMask
                     }
                 }
             }
-            randomSubsetOfMask(normalsMask, (float)maxPointsPart);
+            randomSubsetOfMask(normalsMaskCpu, (float)maxPointsPart);
+
+            normalsMaskCpu.copyTo(normalsMask);
         }
     }
 }
 
-//TODO: rewrite to TMat
+//TODO: remove this comment, almost compatible with TMat
+template<typename TMat>
 bool RGBDICPOdometryImpl(OutputArray _Rt, const Mat& initRt,
                          const OdometryFrame srcFrame,
                          const OdometryFrame dstFrame,
@@ -730,8 +737,9 @@ bool RGBDICPOdometryImpl(OutputArray _Rt, const Mat& initRt,
     for(int level = (int)iterCounts.size() - 1; level >= 0; level--)
     {
         const Matx33f& levelCameraMatrix = pyramidCameraMatrix[level];
-        const Mat srcLevelDepth, dstLevelDepth;
-        const Mat srcLevelImage, dstLevelImage;
+
+        const TMat srcLevelDepth, dstLevelDepth;
+        const TMat srcLevelImage, dstLevelImage;
         srcFrame.getPyramidAt(srcLevelDepth, OdometryFramePyramidType::PYR_DEPTH, level);
         dstFrame.getPyramidAt(dstLevelDepth, OdometryFramePyramidType::PYR_DEPTH, level);
 
@@ -751,16 +759,16 @@ bool RGBDICPOdometryImpl(OutputArray _Rt, const Mat& initRt,
         for(int iter = 0; iter < iterCounts[level]; iter ++)
         {
             Mat resultRt_inv = resultRt.inv(DECOMP_SVD);
-            Mat corresps_rgbd, corresps_icp, diffs_rgbd;
-            Mat dummy;
+            TMat corresps_rgbd, corresps_icp, diffs_rgbd;
+            TMat dummy;
             double sigma_rgbd = 0, dummyFloat = 0;
 
-            const Mat pyramidMask;
+            const TMat pyramidMask;
             srcFrame.getPyramidAt(pyramidMask, OdometryFramePyramidType::PYR_MASK, level);
 
             if(method != OdometryType::DEPTH) // RGB
             {
-                const Mat pyramidTexturedMask;
+                const TMat pyramidTexturedMask;
                 dstFrame.getPyramidAt(pyramidTexturedMask, OdometryFramePyramidType::PYR_TEXMASK, level);
                 computeCorresps(levelCameraMatrix, resultRt,
                                 srcLevelImage, srcLevelDepth, pyramidMask,
@@ -772,11 +780,11 @@ bool RGBDICPOdometryImpl(OutputArray _Rt, const Mat& initRt,
             {
                 if (algtype == OdometryAlgoType::COMMON)
                 {
-                    const Mat pyramidNormalsMask;
+                    const TMat pyramidNormalsMask;
                     dstFrame.getPyramidAt(pyramidNormalsMask, OdometryFramePyramidType::PYR_NORMMASK, level);
                     computeCorresps(levelCameraMatrix, resultRt,
-                                    Mat(), srcLevelDepth, pyramidMask,
-                                    Mat(), dstLevelDepth, pyramidNormalsMask, maxDepthDiff,
+                                    TMat(), srcLevelDepth, pyramidMask,
+                                    TMat(), dstLevelDepth, pyramidNormalsMask, maxDepthDiff,
                                     corresps_icp, dummy, dummyFloat, OdometryType::DEPTH);
                 }
             }
@@ -784,14 +792,14 @@ bool RGBDICPOdometryImpl(OutputArray _Rt, const Mat& initRt,
             if(corresps_rgbd.rows < minCorrespsCount && corresps_icp.rows < minCorrespsCount && algtype != OdometryAlgoType::FAST)
                 break;
 
-            const Mat srcPyrCloud;
+            const TMat srcPyrCloud;
             srcFrame.getPyramidAt(srcPyrCloud, OdometryFramePyramidType::PYR_CLOUD, level);
 
 
             Mat AtA(transformDim, transformDim, CV_64FC1, Scalar(0)), AtB(transformDim, 1, CV_64FC1, Scalar(0));
             if(corresps_rgbd.rows >= minCorrespsCount)
             {
-                const Mat srcPyrImage, dstPyrImage, dstPyrIdx, dstPyrIdy;
+                const TMat srcPyrImage, dstPyrImage, dstPyrIdx, dstPyrIdy;
                 srcFrame.getPyramidAt(srcPyrImage, OdometryFramePyramidType::PYR_IMAGE, level);
                 dstFrame.getPyramidAt(dstPyrImage, OdometryFramePyramidType::PYR_IMAGE, level);
                 dstFrame.getPyramidAt(dstPyrIdx, OdometryFramePyramidType::PYR_DIX, level);
@@ -804,7 +812,7 @@ bool RGBDICPOdometryImpl(OutputArray _Rt, const Mat& initRt,
             }
             if(corresps_icp.rows >= minCorrespsCount || algtype == OdometryAlgoType::FAST)
             {
-                const Mat dstPyrCloud, dstPyrNormals, srcPyrNormals;
+                const TMat dstPyrCloud, dstPyrNormals, srcPyrNormals;
                 dstFrame.getPyramidAt(dstPyrCloud, OdometryFramePyramidType::PYR_CLOUD, level);
                 dstFrame.getPyramidAt(dstPyrNormals, OdometryFramePyramidType::PYR_NORM, level);
 
@@ -846,6 +854,13 @@ bool RGBDICPOdometryImpl(OutputArray _Rt, const Mat& initRt,
                 ksi = tmp61;
             }
 
+            //DEBUG
+            /*
+            std::cout << "A^T*A" << std::endl << AtA << std::endl;
+            std::cout << "A^T*b" << std::endl << AtB << std::endl;
+            std::cout << "ksi" << std::endl << ksi << std::endl << std::endl;
+            */
+
             computeProjectiveMatrix(ksi, currRt);
             resultRt = currRt * resultRt;
 
@@ -880,18 +895,32 @@ bool RGBDICPOdometryImpl(OutputArray _Rt, const Mat& initRt,
 
 // Rotate dst by RtInv to get corresponding src pixels
 // In RGB case compute sigma and diffs too
+template<typename TMat>
 void computeCorresps(const Matx33f& _K, const Mat& rt,
-                     const Mat& imageSrc, const Mat& depthSrc, const Mat& validMaskSrc,
-                     const Mat& imageDst, const Mat& depthDst, const Mat& selectMaskDst, float maxDepthDiff,
-                     Mat& _corresps, Mat& _diffs, double& _sigma, OdometryType method)
+                     const TMat& imageSrcT, const TMat& depthSrcT, const TMat& validMaskSrcT,
+                     const TMat& imageDstT, const TMat& depthDstT, const TMat& selectMaskDstT, float maxDepthDiff,
+                     TMat& correspsT, TMat& diffsT, double& _sigma, OdometryType method)
 {
     Mat mrtInv = rt.inv(DECOMP_SVD);
     Matx44d rtInv = mrtInv;
 
-    Mat corresps(depthDst.size(), CV_16SC2, Scalar::all(-1));
-    Mat diffs;
+    Mat imageSrc, depthSrc, validMaskSrc;
+    Mat imageDst, depthDst, selectMaskDst;
+    imageSrcT.copyTo(imageSrc);
+    depthSrcT.copyTo(depthSrc);
+    validMaskSrcT.copyTo(validMaskSrc);
+    imageDstT.copyTo(imageDst);
+    depthDstT.copyTo(depthDst);
+    selectMaskDstT.copyTo(selectMaskDst);
+
+    Mat corresps2d(depthDst.size(), CV_16SC2, Scalar::all(-1));
+    Mat diffs2d;
     if (method == OdometryType::RGB)
-        diffs = Mat(depthDst.size(), CV_32F, Scalar::all(-1));
+        diffs2d = Mat(depthDst.size(), CV_32F, Scalar::all(-1));
+
+    //DEBUG
+    Mat reasons(depthDst.size(), CV_32SC1, Scalar::all(0));
+    Mat dists(depthDst.size(), CV_32FC1, Scalar::all(0));
 
     // src_2d = K * src_3d, src_3d = K_inv * [src_2d | z]
     //
@@ -938,6 +967,9 @@ void computeCorresps(const Matx33f& _K, const Mat& rt,
         const uchar* maskDst_row = selectMaskDst.ptr<uchar>(vdst);
         for (int udst = 0; udst < depthDst.cols; udst++)
         {
+            //DEBUG
+            int reason = 0;
+
             float ddst = depthDst_row[udst];
 
             if (maskDst_row[udst] && !cvIsNaN(ddst))
@@ -952,10 +984,15 @@ void computeCorresps(const Matx33f& _K, const Mat& rt,
                     if (r.contains(Point(usrc, vsrc)))
                     {
                         float dsrc = depthSrc.at<float>(vsrc, usrc);
+
+                        //DEBUG
+                        double val = std::abs(transformed_ddst - dsrc) / maxDepthDiff;
+                        dists.at<float>(vdst, udst) = cvIsNaN(val) ? -0.1f : val;
+
                         if (validMaskSrc.at<uchar>(vsrc, usrc) && std::abs(transformed_ddst - dsrc) <= maxDepthDiff)
                         {
                             CV_DbgAssert(!cvIsNaN(dsrc));
-                            Vec2s& c = corresps.at<Vec2s>(vsrc, usrc);
+                            Vec2s& c = corresps2d.at<Vec2s>(vsrc, usrc);
                             float diff = 0;
                             if (c[0] != -1)
                             {
@@ -981,17 +1018,66 @@ void computeCorresps(const Matx33f& _K, const Mat& rt,
                             c = Vec2s((short)udst, (short)vdst);
                             if (method == OdometryType::RGB)
                             {
-                                diffs.at<float>(vsrc, usrc) = diff;
+                                diffs2d.at<float>(vsrc, usrc) = diff;
                                 sigma += diff * diff;
                             }
                         }
+                        //DEBUG
+                        else
+                        {
+                            if (!validMaskSrc.at<uchar>(vsrc, usrc))
+                                reason = 4;
+                            else if (!(std::abs(transformed_ddst - dsrc) <= maxDepthDiff))
+                                reason = 5;
+                        }
+                    }
+                    //DEBUG
+                    else
+                    {
+                        reason = 3;
                     }
                 }
+                //DEBUG
+                else
+                {
+                    reason = 2;
+                }
             }
+            //DEBUG
+            else
+            {
+                reason = 1;
+            }
+
+            //DEBUG
+            reasons.at<int>(vdst, udst) = reason;
         }
     }
 
     _sigma = std::sqrt(sigma / double(correspCount));
+
+    //TODO: remove it
+    // TMat& correspsT
+    // TMat& diffsT
+
+    Mat corresps1d(correspCount, 1, CV_32SC4);
+    Vec4i* corresps1dPtr = corresps1d.ptr<Vec4i>();
+    Mat diffs1d;
+    float* diffs1dPtr;
+    if (method == OdometryType::RGB)
+    {
+        diffs1d.create(correspCount, 1, CV_32F);
+    }
+
+    // ...
+
+    corresps1d.copyTo(correspsT);
+    if (method == OdometryType::RGB)
+    {
+        diffs1d.copyTo(diffsT);
+    }
+
+
 
     _corresps.create(correspCount, 1, CV_32SC4);
     Vec4i* corresps_ptr = _corresps.ptr<Vec4i>();
@@ -1003,11 +1089,12 @@ void computeCorresps(const Matx33f& _K, const Mat& rt,
     }
     for (int vsrc = 0, i = 0; vsrc < corresps.rows; vsrc++)
     {
-        const Vec2s* corresps_row = corresps.ptr<Vec2s>(vsrc);
+        //TODO URGENT: check it, should be 1d instead
+        const Vec2s* corresps_row = corresps2d.ptr<Vec2s>(vsrc);
         const float* diffs_row = nullptr;
         if (method == OdometryType::RGB)
             diffs_row = diffs.ptr<float>(vsrc);
-        for (int usrc = 0; usrc < corresps.cols; usrc++)
+        for (int usrc = 0; usrc < corresps2d.cols; usrc++)
         {
             const Vec2s& c = corresps_row[usrc];
             const float& d = diffs_row[usrc];
@@ -1020,6 +1107,10 @@ void computeCorresps(const Matx33f& _K, const Mat& rt,
             }
         }
     }
+
+
+
+
 }
 
 //TODO: rewrite to TMat
@@ -1173,11 +1264,58 @@ void computeProjectiveMatrix(const Mat& ksi, Mat& Rt)
 
 bool solveSystem(const Mat& AtA, const Mat& AtB, double detThreshold, Mat& x)
 {
-    double det = determinant(AtA);
-    if (fabs(det) < detThreshold || cvIsNaN(det) || cvIsInf(det))
-        return false;
+    const bool doScaling = false;
 
-    solve(AtA, AtB, x, DECOMP_CHOLESKY);
+    // column scale inverted, for jacobian scaling
+    Mat_<double> di;
+
+    // do the jacobian conditioning improvement used in Ceres
+    if (doScaling)
+    {
+        Mat AtA_scaled = AtA.clone(), AtB_scaled = AtB.clone();
+        // L2-normalize each jacobian column
+        // vec d = {d_j = sum(J_ij^2) for each column j of J} = get_diag{ J^T * J }
+        // di = { 1/(1+sqrt(d_j)) }, extra +1 to avoid div by zero
+        Mat_<double> ds;
+        const Mat_<double> diag = AtA_scaled.diag();
+        cv::sqrt(diag, ds);
+        di = 1.0 / (ds + 1.0);
+
+        // J := J * d_inv, d_inv = make_diag(di)
+        // J^T*J := (J * d_inv)^T * J * d_inv = diag(di) * (J^T * J) * diag(di) = eltwise_mul(J^T*J, di*di^T)
+        // J^T*b := (J * d_inv)^T * b = d_inv^T * J^T*b = eltwise_mul(J^T*b, di)
+        // scaling J^T*J
+        int nVars = AtA.rows;
+        for (int i = 0; i < nVars; i++)
+        {
+            double* atarow = AtA_scaled.ptr<double>(i);
+            for (int j = 0; j < nVars; j++)
+            {
+                atarow[j] *= di(i) * di(j);
+            }
+        }
+        // scaling J^T*b
+        for (int i = 0; i < nVars; i++)
+        {
+            AtB_scaled.at<double>(i, 0) *= di(i);
+        }
+    
+        double det = determinant(AtA_scaled);
+        if (fabs(det) < detThreshold || cvIsNaN(det) || cvIsInf(det))
+            return false;
+
+        solve(AtA_scaled, AtB_scaled, x, DECOMP_CHOLESKY);
+
+        x = x.mul(di);
+    }
+    else
+    {
+        double det = determinant(AtA);
+        if (fabs(det) < detThreshold || cvIsNaN(det) || cvIsInf(det))
+            return false;
+
+        solve(AtA, AtB, x, DECOMP_CHOLESKY);
+    }
 
     return true;
 }
