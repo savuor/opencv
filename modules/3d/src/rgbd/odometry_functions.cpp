@@ -891,7 +891,7 @@ bool RGBDICPOdometryImpl(OutputArray _Rt, const Mat& initRt,
     return isOk;
 }
 
-//TODO: rewrite to TMat
+//TODO: remove this comment, compatible with TMat
 
 // Rotate dst by RtInv to get corresponding src pixels
 // In RGB case compute sigma and diffs too
@@ -1063,54 +1063,40 @@ void computeCorresps(const Matx33f& _K, const Mat& rt,
     Mat corresps1d(correspCount, 1, CV_32SC4);
     Vec4i* corresps1dPtr = corresps1d.ptr<Vec4i>();
     Mat diffs1d;
-    float* diffs1dPtr;
+    float* diffs1dPtr = nullptr;
     if (method == OdometryType::RGB)
     {
         diffs1d.create(correspCount, 1, CV_32F);
+        diffs1dPtr = diffs1d.ptr<float>();
     }
 
-    // ...
+    int ic = 0;
+    for (int vsrc = 0; vsrc < corresps2d.rows; vsrc++)
+    {
+        const Vec2s* corresps2d_row = corresps2d.ptr<Vec2s>(vsrc);
+        const float *diffs_row = nullptr;
+        if (method == OdometryType::RGB)
+            diffs_row = diffs.ptr<float>(vsrc);
+
+        for (int usrc = 0; usrc < corresps2d.cols; usrc++)
+        {
+            const Vec2s& c = corresps2d_row[usrc];
+            const float& d = diffs_row[usrc];
+            if (c[0] != -1)
+            {
+                corresps1dPtr[ic] = Vec4i(usrc, vsrc, c[0], c[1]);
+                if (method == OdometryType::RGB)
+                    diffs1dPtr[ic] = d;
+                ic++;
+            }
+        }
+    }
 
     corresps1d.copyTo(correspsT);
     if (method == OdometryType::RGB)
     {
         diffs1d.copyTo(diffsT);
     }
-
-
-
-    _corresps.create(correspCount, 1, CV_32SC4);
-    Vec4i* corresps_ptr = _corresps.ptr<Vec4i>();
-    float* diffs_ptr = nullptr;
-    if (method == OdometryType::RGB)
-    {
-        _diffs.create(correspCount, 1, CV_32F);
-        diffs_ptr = _diffs.ptr<float>();
-    }
-    for (int vsrc = 0, i = 0; vsrc < corresps.rows; vsrc++)
-    {
-        //TODO URGENT: check it, should be 1d instead
-        const Vec2s* corresps_row = corresps2d.ptr<Vec2s>(vsrc);
-        const float* diffs_row = nullptr;
-        if (method == OdometryType::RGB)
-            diffs_row = diffs.ptr<float>(vsrc);
-        for (int usrc = 0; usrc < corresps2d.cols; usrc++)
-        {
-            const Vec2s& c = corresps_row[usrc];
-            const float& d = diffs_row[usrc];
-            if (c[0] != -1)
-            {
-                corresps_ptr[i] = Vec4i(usrc, vsrc, c[0], c[1]);
-                if (method == OdometryType::RGB)
-                    diffs_ptr[i] = d;
-                i++;
-            }
-        }
-    }
-
-
-
-
 }
 
 //TODO: rewrite to TMat
