@@ -27,6 +27,7 @@ public:
 };
 
 
+template<typename TMat>
 class OdometryICP : public Odometry::Impl
 {
 private:
@@ -46,36 +47,45 @@ public:
                          InputArray dstDepthFrame, InputArray dstRGBFrame, OutputArray Rt) const override;
 };
 
-OdometryICP::OdometryICP(OdometrySettings _settings, OdometryAlgoType _algtype)
+template<typename TMat>
+OdometryICP<TMat>::OdometryICP(OdometrySettings _settings, OdometryAlgoType _algtype)
 {
     this->settings = _settings;
     this->algtype = _algtype;
 }
 
-OdometryICP::~OdometryICP()
+template<typename TMat>
+OdometryICP<TMat>::~OdometryICP()
 {
 }
 
-OdometryFrame OdometryICP::createOdometryFrame() const
+template<typename TMat>
+OdometryFrame OdometryICP<TMat>::createOdometryFrame() const
 {
 #ifdef HAVE_OPENCL
-    return OdometryFrame(OdometryFrameStoreType::UMAT);
+    if (std::is_same<TMat, UMat>::value)
+        return OdometryFrame(OdometryFrameStoreType::UMAT);
+    else
+        return OdometryFrame(OdometryFrameStoreType::MAT);
 #else
     return OdometryFrame(OdometryFrameStoreType::MAT);
 #endif
 }
 
-void OdometryICP::prepareFrame(OdometryFrame& frame)
+template<typename TMat>
+void OdometryICP<TMat>::prepareFrame(OdometryFrame& frame)
 {
-    prepareICPFrame(frame, frame, this->settings, this->algtype);
+    prepareICPFrame<TMat>(frame, frame, this->settings, this->algtype);
 }
 
-void OdometryICP::prepareFrames(OdometryFrame& srcFrame, OdometryFrame& dstFrame)
+template<typename TMat>
+void OdometryICP<TMat>::prepareFrames(OdometryFrame& srcFrame, OdometryFrame& dstFrame)
 {
-    prepareICPFrame(srcFrame, dstFrame, this->settings, this->algtype);
+    prepareICPFrame<TMat>(srcFrame, dstFrame, this->settings, this->algtype);
 }
 
-bool OdometryICP::compute(const OdometryFrame& srcFrame, const OdometryFrame& dstFrame, OutputArray Rt) const
+template<typename TMat>
+bool OdometryICP<TMat>::compute(const OdometryFrame& srcFrame, const OdometryFrame& dstFrame, OutputArray Rt) const
 {
     Matx33f cameraMatrix;
     settings.getCameraMatrix(cameraMatrix);
@@ -85,32 +95,35 @@ bool OdometryICP::compute(const OdometryFrame& srcFrame, const OdometryFrame& ds
     CV_CheckTypeEQ(miterCounts.type(), CV_32S, "");
     for (int i = 0; i < miterCounts.size().height; i++)
         iterCounts.push_back(miterCounts.at<int>(i));
-    bool isCorrect = RGBDICPOdometryImpl(Rt, Mat(), srcFrame, dstFrame, cameraMatrix,
-                                         this->settings.getMaxDepthDiff(), this->settings.getAngleThreshold(),
-                                         iterCounts, this->settings.getMaxTranslation(),
-                                         this->settings.getMaxRotation(), settings.getSobelScale(),
-                                         OdometryType::DEPTH, OdometryTransformType::RIGID_TRANSFORMATION, this->algtype);
+    bool isCorrect = RGBDICPOdometryImpl<TMat>(Rt, Mat(), srcFrame, dstFrame, cameraMatrix,
+                                               this->settings.getMaxDepthDiff(), this->settings.getAngleThreshold(),
+                                               iterCounts, this->settings.getMaxTranslation(),
+                                               this->settings.getMaxRotation(), settings.getSobelScale(),
+                                               OdometryType::DEPTH, OdometryTransformType::RIGID_TRANSFORMATION, this->algtype);
     return isCorrect;
 }
 
-bool OdometryICP::compute(InputArray _srcFrame, InputArray _dstFrame, OutputArray Rt) const
+template<typename TMat>
+bool OdometryICP<TMat>::compute(InputArray _srcFrame, InputArray _dstFrame, OutputArray Rt) const
 {
     OdometryFrame srcFrame = this->createOdometryFrame();
     OdometryFrame dstFrame = this->createOdometryFrame();
     srcFrame.setDepth(_srcFrame);
     dstFrame.setDepth(_dstFrame);
 
-    prepareICPFrame(srcFrame, dstFrame, this->settings, this->algtype);
+    prepareICPFrame<TMat>(srcFrame, dstFrame, this->settings, this->algtype);
 
-    bool isCorrect = compute(srcFrame, dstFrame, Rt);
+    bool isCorrect = compute<TMat>(srcFrame, dstFrame, Rt);
     return isCorrect;
 }
 
-bool OdometryICP::compute(InputArray, InputArray, InputArray, InputArray, OutputArray) const
+template<typename TMat>
+bool OdometryICP<TMat>::compute(InputArray, InputArray, InputArray, InputArray, OutputArray) const
 {
     CV_Error(cv::Error::StsBadFunc, "This odometry does not work with depth and rgb data simultaneously");
 }
 
+template<typename TMat>
 class OdometryRGB : public Odometry::Impl
 {
 private:
@@ -130,32 +143,38 @@ public:
                          InputArray dstDepthFrame, InputArray dstRGBFrame, OutputArray Rt) const override;
 };
 
-OdometryRGB::OdometryRGB(OdometrySettings _settings, OdometryAlgoType _algtype)
+template<typename TMat>
+OdometryRGB<TMat>::OdometryRGB(OdometrySettings _settings, OdometryAlgoType _algtype)
 {
     this->settings = _settings;
     this->algtype = _algtype;
 }
 
-OdometryRGB::~OdometryRGB()
-{
-}
+template<typename TMat>
+OdometryRGB<TMat>::~OdometryRGB()
+{ }
 
-OdometryFrame OdometryRGB::createOdometryFrame() const
+template<typename TMat>
+OdometryFrame OdometryRGB<TMat>::createOdometryFrame() const
 {
+    //TODO: fixit
     return OdometryFrame(OdometryFrameStoreType::MAT);
 }
 
-void OdometryRGB::prepareFrame(OdometryFrame& frame)
+template<typename TMat>
+void OdometryRGB<TMat>::prepareFrame(OdometryFrame& frame)
 {
-    prepareRGBFrame(frame, frame, this->settings, false);
+    prepareRGBFrame<TMat>(frame, frame, this->settings, false);
 }
 
-void OdometryRGB::prepareFrames(OdometryFrame& srcFrame, OdometryFrame& dstFrame)
+template<typename TMat>
+void OdometryRGB<TMat>::prepareFrames(OdometryFrame& srcFrame, OdometryFrame& dstFrame)
 {
-    prepareRGBFrame(srcFrame, dstFrame, this->settings, false);
+    prepareRGBFrame<TMat>(srcFrame, dstFrame, this->settings, false);
 }
 
-bool OdometryRGB::compute(const OdometryFrame& srcFrame, const OdometryFrame& dstFrame, OutputArray Rt) const
+template<typename TMat>
+bool OdometryRGB<TMat>::compute(const OdometryFrame& srcFrame, const OdometryFrame& dstFrame, OutputArray Rt) const
 {
     Matx33f cameraMatrix;
     settings.getCameraMatrix(cameraMatrix);
@@ -165,15 +184,16 @@ bool OdometryRGB::compute(const OdometryFrame& srcFrame, const OdometryFrame& ds
     CV_CheckTypeEQ(miterCounts.type(), CV_32S, "");
     for (int i = 0; i < miterCounts.size().height; i++)
         iterCounts.push_back(miterCounts.at<int>(i));
-    bool isCorrect = RGBDICPOdometryImpl(Rt, Mat(), srcFrame, dstFrame, cameraMatrix,
-                                         this->settings.getMaxDepthDiff(), this->settings.getAngleThreshold(),
-                                         iterCounts, this->settings.getMaxTranslation(),
-                                         this->settings.getMaxRotation(), settings.getSobelScale(),
-                                         OdometryType::RGB, OdometryTransformType::RIGID_TRANSFORMATION, this->algtype);
+    bool isCorrect = RGBDICPOdometryImpl<TMat>(Rt, Mat(), srcFrame, dstFrame, cameraMatrix,
+                                               this->settings.getMaxDepthDiff(), this->settings.getAngleThreshold(),
+                                               iterCounts, this->settings.getMaxTranslation(),
+                                               this->settings.getMaxRotation(), settings.getSobelScale(),
+                                               OdometryType::RGB, OdometryTransformType::RIGID_TRANSFORMATION, this->algtype);
     return isCorrect;
 }
 
-bool OdometryRGB::compute(InputArray _srcFrame, InputArray _dstFrame, OutputArray Rt) const
+template<typename TMat>
+bool OdometryRGB<TMat>::compute(InputArray _srcFrame, InputArray _dstFrame, OutputArray Rt) const
 {
     OdometryFrame srcFrame = this->createOdometryFrame();
     OdometryFrame dstFrame = this->createOdometryFrame();
@@ -186,11 +206,13 @@ bool OdometryRGB::compute(InputArray _srcFrame, InputArray _dstFrame, OutputArra
     return isCorrect;
 }
 
-bool OdometryRGB::compute(InputArray, InputArray, InputArray, InputArray, OutputArray) const
+template<typename TMat>
+bool OdometryRGB<TMat>::compute(InputArray, InputArray, InputArray, InputArray, OutputArray) const
 {
     CV_Error(cv::Error::StsBadFunc, "This odometry does not work with depth and rgb data simultaneously");
 }
 
+template<typename TMat>
 class OdometryRGBD : public Odometry::Impl
 {
 private:
@@ -210,32 +232,37 @@ public:
                          InputArray dstDepthFrame, InputArray dstRGBFrame, OutputArray Rt) const override;
 };
 
-OdometryRGBD::OdometryRGBD(OdometrySettings _settings, OdometryAlgoType _algtype)
+template<typename TMat>
+OdometryRGBD<TMat>::OdometryRGBD(OdometrySettings _settings, OdometryAlgoType _algtype)
 {
     this->settings = _settings;
     this->algtype = _algtype;
 }
 
-OdometryRGBD::~OdometryRGBD()
-{
-}
+template<typename TMat>
+OdometryRGBD<TMat>::~OdometryRGBD()
+{ }
 
-OdometryFrame OdometryRGBD::createOdometryFrame() const
+template<typename TMat>
+OdometryFrame OdometryRGBD<TMat>::createOdometryFrame() const
 {
     return OdometryFrame(OdometryFrameStoreType::MAT);
 }
 
-void OdometryRGBD::prepareFrame(OdometryFrame& frame)
+template<typename TMat>
+void OdometryRGBD<TMat>::prepareFrame(OdometryFrame& frame)
 {
     prepareRGBDFrame(frame, frame, this->settings, this->algtype);
 }
 
-void OdometryRGBD::prepareFrames(OdometryFrame& srcFrame, OdometryFrame& dstFrame)
+template<typename TMat>
+void OdometryRGBD<TMat>::prepareFrames(OdometryFrame& srcFrame, OdometryFrame& dstFrame)
 {
     prepareRGBDFrame(srcFrame, dstFrame, this->settings, this->algtype);
 }
 
-bool OdometryRGBD::compute(const OdometryFrame& srcFrame, const OdometryFrame& dstFrame, OutputArray Rt) const
+template<typename TMat>
+bool OdometryRGBD<TMat>::compute(const OdometryFrame& srcFrame, const OdometryFrame& dstFrame, OutputArray Rt) const
 {
     Matx33f cameraMatrix;
     settings.getCameraMatrix(cameraMatrix);
@@ -253,13 +280,14 @@ bool OdometryRGBD::compute(const OdometryFrame& srcFrame, const OdometryFrame& d
     return isCorrect;
 }
 
-bool OdometryRGBD::compute(InputArray, InputArray, OutputArray) const
+template<typename TMat>
+bool OdometryRGBD<TMat>::compute(InputArray, InputArray, OutputArray) const
 {
     CV_Error(cv::Error::StsBadFunc, "This volume needs depth and rgb data simultaneously");
 }
-
-bool OdometryRGBD::compute(InputArray _srcDepthFrame, InputArray _srcRGBFrame,
-                           InputArray _dstDepthFrame, InputArray _dstRGBFrame, OutputArray Rt) const
+template<typename TMat>
+bool OdometryRGBD<TMat>::compute(InputArray _srcDepthFrame, InputArray _srcRGBFrame,
+                                 InputArray _dstDepthFrame, InputArray _dstRGBFrame, OutputArray Rt) const
 {
     OdometryFrame srcFrame = this->createOdometryFrame();
     OdometryFrame dstFrame = this->createOdometryFrame();
@@ -273,12 +301,14 @@ bool OdometryRGBD::compute(InputArray _srcDepthFrame, InputArray _srcRGBFrame,
     return isCorrect;
 }
 
+//TODO: this
 Odometry::Odometry()
 {
     OdometrySettings settings;
     this->impl = makePtr<OdometryICP>(settings, OdometryAlgoType::COMMON);
 }
 
+//TODO: this
 Odometry::Odometry(OdometryType otype)
 {
     OdometrySettings settings;
@@ -300,6 +330,7 @@ Odometry::Odometry(OdometryType otype)
     }
 }
 
+//TODO: this
 Odometry::Odometry(OdometryType otype, OdometrySettings settings, OdometryAlgoType algtype)
 {
     switch (otype)

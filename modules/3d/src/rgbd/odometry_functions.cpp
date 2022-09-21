@@ -22,33 +22,36 @@ enum
     UTSIZE = 27
 };
 
-//TODO: rewrite to TMat
+//TODO: remove this comment, compatible with TMat
+template<typename TMat>
 void prepareRGBDFrame(OdometryFrame& srcFrame, OdometryFrame& dstFrame, OdometrySettings settings, OdometryAlgoType algtype)
 {
-    prepareRGBFrame(srcFrame, dstFrame, settings, true);
-    prepareICPFrame(srcFrame, dstFrame, settings, algtype);
+    prepareRGBFrame<TMat>(srcFrame, dstFrame, settings, true);
+    prepareICPFrame<TMat>(srcFrame, dstFrame, settings, algtype);
 }
 
-//TODO: rewrite to TMat
+//TODO: remove this comment, compatible with TMat
+template<typename TMat>
 void prepareRGBFrame(OdometryFrame& srcFrame, OdometryFrame& dstFrame, OdometrySettings settings, bool useDepth)
 {
-    prepareRGBFrameBase(srcFrame, settings, useDepth);
-    prepareRGBFrameBase(dstFrame, settings, useDepth);
+    prepareRGBFrameBase<TMat>(srcFrame, settings, useDepth);
+    prepareRGBFrameBase<TMat>(dstFrame, settings, useDepth);
 
-    prepareRGBFrameSrc(srcFrame, settings);
-    prepareRGBFrameDst(dstFrame, settings);
+    prepareRGBFrameSrc<TMat>(srcFrame, settings);
+    prepareRGBFrameDst<TMat>(dstFrame, settings);
 }
 
-//TODO: rewrite to TMat
+//TODO: remove this comment, compatible with TMat
+template<typename TMat>
 void prepareICPFrame(OdometryFrame& srcFrame, OdometryFrame& dstFrame, OdometrySettings settings, OdometryAlgoType algtype)
 {
-    prepareICPFrameBase(srcFrame, settings);
-    prepareICPFrameBase(dstFrame, settings);
+    prepareICPFrameBase<TMat>(srcFrame, settings);
+    prepareICPFrameBase<TMat>(dstFrame, settings);
 
-    prepareICPFrameSrc(srcFrame, settings);
+    prepareICPFrameSrc<TMat>(srcFrame, settings);
     if (algtype == OdometryAlgoType::FAST)
-        prepareICPFrameDst(srcFrame, settings);
-    prepareICPFrameDst(dstFrame, settings);
+        prepareICPFrameDst<TMat>(srcFrame, settings);
+    prepareICPFrameDst<TMat>(dstFrame, settings);
 }
 
 //TODO: remove this comment, compatible with TMat
@@ -580,7 +583,7 @@ void preparePyramidTexturedMask(InputArrayOfArrays pyramid_dI_dx, InputArrayOfAr
             pyramidMaskT.copyTo(pyramidMaskM);
             Mat texMask = texturedMask & pyramidMaskM;
 
-            randomSubsetOfMask(texMask, (float)maxPointsPart);
+            randomSubsetOfMask<TMat>(texMask, (float)maxPointsPart);
             texMask.copyTo(getTMat<TMat>(pyramidTexturedMask, (int)i));
         }
     }
@@ -683,10 +686,10 @@ void preparePyramidNormalsMask(InputArray pyramidNormals, InputArray pyramidMask
         pyramidNormalsMask.create((int)maskLevels, 1, CV_8U, -1);
         for (size_t i = 0; i < maskLevels; i++)
         {
-            TMat& normalsMask = getTMatRef(pyramidNormalsMask, (int)i);
-            normalsMask = pyramidMask.getTMat((int)i).clone();
+            TMat& normalsMask = getTMatRef<TMat>(pyramidNormalsMask, (int)i);
+            normalsMask = getTMat<TMat>(pyramidMask, (int)i).clone();
 
-            const TMat normals = getTMat(pyramidNormals, (int)i);
+            const TMat normals = getTMat<TMat>(pyramidNormals, (int)i);
             Mat normalsCpu, normalsMaskCpu;
             normals.copyTo(normalsCpu);
             normalsMask.copyTo(normalsMaskCpu);
@@ -704,7 +707,7 @@ void preparePyramidNormalsMask(InputArray pyramidNormals, InputArray pyramidMask
                     }
                 }
             }
-            randomSubsetOfMask(normalsMaskCpu, (float)maxPointsPart);
+            randomSubsetOfMask<TMat>(normalsMaskCpu, (float)maxPointsPart);
 
             normalsMaskCpu.copyTo(normalsMask);
         }
@@ -1056,10 +1059,6 @@ void computeCorresps(const Matx33f& _K, const Mat& rt,
 
     _sigma = std::sqrt(sigma / double(correspCount));
 
-    //TODO: remove it
-    // TMat& correspsT
-    // TMat& diffsT
-
     Mat corresps1d(correspCount, 1, CV_32SC4);
     Vec4i* corresps1dPtr = corresps1d.ptr<Vec4i>();
     Mat diffs1d;
@@ -1076,7 +1075,7 @@ void computeCorresps(const Matx33f& _K, const Mat& rt,
         const Vec2s* corresps2d_row = corresps2d.ptr<Vec2s>(vsrc);
         const float *diffs_row = nullptr;
         if (method == OdometryType::RGB)
-            diffs_row = diffs.ptr<float>(vsrc);
+            diffs_row = diffs2d.ptr<float>(vsrc);
 
         for (int usrc = 0; usrc < corresps2d.cols; usrc++)
         {
@@ -1099,13 +1098,21 @@ void computeCorresps(const Matx33f& _K, const Mat& rt,
     }
 }
 
-//TODO: rewrite to TMat
-void calcRgbdLsmMatrices(const Mat& cloud0, const Mat& Rt,
-                         const Mat& dI_dx1, const Mat& dI_dy1,
-                         const Mat& corresps, const Mat& _diffs, const double _sigma,
+//TODO: remove this comment, compatible with TMat
+template<typename TMat>
+void calcRgbdLsmMatrices(const TMat& cloud0T, const Mat& Rt,
+                         const TMat& dI_dx1T, const TMat& dI_dy1T,
+                         const TMat& correspsT, const TMat& diffsT, const double _sigma,
                          double fx, double fy, double sobelScaleIn,
                          Mat& AtA, Mat& AtB, OdometryTransformType transformType)
 {
+    Mat cloud0, dI_dx1, dI_dy1, corresps, diffs;
+    cloud0T.copyTo(cloud0);
+    dI_dx1T.copyTo(dI_dx1);
+    dI_dy1T.copyTo(dI_dy1);
+    correspsT.copyTo(corresps);
+    diffsT.copyTo(diffs);
+
     int transformDim = getTransformDim(transformType);
     AtA = Mat(transformDim, transformDim, CV_64FC1, Scalar(0));
     AtB = Mat(transformDim, 1, CV_64FC1, Scalar(0));
@@ -1114,7 +1121,7 @@ void calcRgbdLsmMatrices(const Mat& cloud0, const Mat& Rt,
     CV_Assert(Rt.type() == CV_64FC1);
     Affine3d rtmat(Rt);
 
-    const float* diffs_ptr = _diffs.ptr<float>();
+    const float* diffs_ptr = diffs.ptr<float>();
     const Vec4i* corresps_ptr = corresps.ptr<Vec4i>();
     double sigma = _sigma;
 
@@ -1157,13 +1164,19 @@ void calcRgbdLsmMatrices(const Mat& cloud0, const Mat& Rt,
             AtA.at<double>(x, y) = AtA.at<double>(y, x);
 }
 
-//TODO: rewrite to TMat
 //TODO: remove this comment, compatible with TMat
-void calcICPLsmMatrices(const Mat& cloud0, const Mat& Rt,
-                        const Mat& cloud1, const Mat& normals1,
-                        const Mat& corresps,
+template<typename TMat>
+void calcICPLsmMatrices(const TMat& cloud0T, const TMat& Rt,
+                        const TMat& cloud1T, const TMat& normals1T,
+                        const TMat& correspsT,
                         Mat& AtA, Mat& AtB, OdometryTransformType transformType)
 {
+    Mat cloud0, cloud1, normals1, corresps;
+    cloud0T.copyTo(cloud0);
+    cloud1T.copyTo(cloud1);
+    normals1T.copyTo(normals1);
+    correspsT.copyTo(corresps);
+
     int transformDim = getTransformDim(transformType);
     AtA = Mat(transformDim, transformDim, CV_64FC1, Scalar(0));
     AtB = Mat(transformDim, 1, CV_64FC1, Scalar(0));
@@ -1667,14 +1680,21 @@ struct GetAbInvoker : ParallelLoopBody
     float minCos;
 };
 
-//TODO: rewrite to TMat
-void calcICPLsmMatricesFast(Matx33f cameraMatrix, const Mat& oldPts, const Mat& oldNrm, const Mat& newPts, const Mat& newNrm,
+//TODO: remove this comment, compatible with TMat
+template<typename TMat>
+void calcICPLsmMatricesFast(Matx33f cameraMatrix, const TMat& oldPtsT, const TMat& oldNrmT, const TMat& newPtsT, const TMat& newNrmT,
                             cv::Affine3f pose, int level, float maxDepthDiff, float angleThreshold, cv::Matx66f& A, cv::Vec6f& b)
 {
+    Mat oldPts, oldNrm, newPts, newNrm;
+    oldPtsT.copyTo(oldPts);
+    oldNrmT.copyTo(oldNrm);
+    newPtsT.copyTo(newPts);
+    newNrmT.copyTo(newNrm);
+
     CV_Assert(oldPts.size() == oldNrm.size());
     CV_Assert(newPts.size() == newNrm.size());
 
-    CV_OCL_RUN(ocl::isOpenCLActivated(),
+    CV_OCL_RUN((std::is_same<TMat, UMat>::value && ocl::isOpenCLActivated()),
         ocl_calcICPLsmMatricesFast(cameraMatrix,
             oldPts.getUMat(AccessFlag::ACCESS_READ), oldNrm.getUMat(AccessFlag::ACCESS_READ),
             newPts.getUMat(AccessFlag::ACCESS_READ), newNrm.getUMat(AccessFlag::ACCESS_READ),
@@ -1686,7 +1706,6 @@ void calcICPLsmMatricesFast(Matx33f cameraMatrix, const Mat& oldPts, const Mat& 
     Mutex mutex;
     const Points  op(oldPts), np(newPts);
     const Normals on(oldNrm),  nn(newNrm);
-
 
     Intr intrinsics(cameraMatrix);
     GetAbInvoker invoker(sumAB, mutex, op, on, np, nn, pose,

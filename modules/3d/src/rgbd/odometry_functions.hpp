@@ -195,20 +195,30 @@ void icpCoeffsFunc(OdometryTransformType transformType, double* C, const Point3f
         C[i] = ret[i];
 }
 
+template<typename TMat>
 void prepareRGBDFrame(OdometryFrame& srcFrame, OdometryFrame& dstFrame, const OdometrySettings settings, OdometryAlgoType algtype);
+template<typename TMat>
 void prepareRGBFrame(OdometryFrame& srcFrame, OdometryFrame& dstFrame, const OdometrySettings settings, bool useDepth);
+template<typename TMat>
 void prepareICPFrame(OdometryFrame& srcFrame, OdometryFrame& dstFrame, const OdometrySettings settings, OdometryAlgoType algtype);
 
+template<typename TMat>
 void prepareRGBFrameBase(OdometryFrame& frame, const OdometrySettings settings, bool useDepth);
+template<typename TMat>
 void prepareRGBFrameSrc (OdometryFrame& frame, const OdometrySettings settings);
+template<typename TMat>
 void prepareRGBFrameDst (OdometryFrame& frame, const OdometrySettings settings);
 
+template<typename TMat>
 void prepareICPFrameBase(OdometryFrame& frame, const OdometrySettings settings);
+template<typename TMat>
 void prepareICPFrameSrc (OdometryFrame& frame, const OdometrySettings settings);
+template<typename TMat>
 void prepareICPFrameDst (OdometryFrame& frame, const OdometrySettings settings);
 
-
+template<typename TMat>
 void setPyramids(OdometryFrame& odf, OdometryFramePyramidType oftype, InputArrayOfArrays pyramidImage);
+template<typename TMat>
 void getPyramids(OdometryFrame& odf, OdometryFramePyramidType oftype, OutputArrayOfArrays _pyramid);
 
 void preparePyramidImage(InputArray image, InputOutputArrayOfArrays pyramidImage, size_t levelCount);
@@ -224,18 +234,22 @@ void buildPyramidCameraMatrix(const Matx33f& cameraMatrix, int levels, std::vect
 template<typename TMat>
 void preparePyramidSobel(InputArrayOfArrays pyramidImage, int dx, int dy, InputOutputArrayOfArrays pyramidSobel, int sobelSize);
 
+template<typename TMat>
 void preparePyramidTexturedMask(InputArrayOfArrays pyramid_dI_dx, InputArrayOfArrays pyramid_dI_dy,
                                 InputArray minGradMagnitudes, InputArrayOfArrays pyramidMask, double maxPointsPart,
                                 InputOutputArrayOfArrays pyramidTexturedMask, double sobelScale);
 
+template<typename TMat>
 void randomSubsetOfMask(InputOutputArray _mask, float part);
 
+template<typename TMat>
 void preparePyramidNormals(InputArray normals, InputArrayOfArrays pyramidDepth, InputOutputArrayOfArrays pyramidNormals);
 
+template<typename TMat>
 void preparePyramidNormalsMask(InputArray pyramidNormals, InputArray pyramidMask, double maxPointsPart,
                                InputOutputArrayOfArrays /*std::vector<Mat>&*/ pyramidNormalsMask);
 
-
+template<typename TMat>
 bool RGBDICPOdometryImpl(OutputArray _Rt, const Mat& initRt,
                          const OdometryFrame srcFrame,
                          const OdometryFrame dstFrame,
@@ -244,23 +258,27 @@ bool RGBDICPOdometryImpl(OutputArray _Rt, const Mat& initRt,
                          double maxTranslation, double maxRotation, double sobelScale,
                          OdometryType method, OdometryTransformType transfromType, OdometryAlgoType algtype);
 
+template<typename TMat>
 void computeCorresps(const Matx33f& _K, const Mat& Rt,
-                     const Mat& image0, const Mat& depth0, const Mat& validMask0,
-                     const Mat& image1, const Mat& depth1, const Mat& selectMask1, float maxDepthDiff,
-                     Mat& _corresps, Mat& _diffs, double& _sigma, OdometryType method);
+                     const TMat& image0, const TMat& depth0, const TMat& validMask0,
+                     const TMat& image1, const TMat& depth1, const TMat& selectMask1, float maxDepthDiff,
+                     TMat& _corresps, TMat& _diffs, double& _sigma, OdometryType method);
 
-void calcRgbdLsmMatrices(const Mat& cloud0, const Mat& Rt,
-                         const Mat& dI_dx1, const Mat& dI_dy1,
-                         const Mat& corresps, const Mat& diffs, const double sigma,
+template<typename TMat>
+void calcRgbdLsmMatrices(const TMat& cloud0, const Mat& Rt,
+                         const TMat& dI_dx1, const TMat& dI_dy1,
+                         const TMat& corresps, const TMat& diffs, const double sigma,
                          double fx, double fy, double sobelScaleIn,
                          Mat& AtA, Mat& AtB, OdometryTransformType transformType);
 
-void calcICPLsmMatrices(const Mat& cloud0, const Mat& Rt,
-                        const Mat& cloud1, const Mat& normals1,
-                        const Mat& corresps,
+template<typename TMat>
+void calcICPLsmMatrices(const TMat& cloud0, const TMat& Rt,
+                        const TMat& cloud1, const TMat& normals1,
+                        const TMat& corresps,
                         Mat& AtA, Mat& AtB, OdometryTransformType transformType);
 
-void calcICPLsmMatricesFast(Matx33f cameraMatrix, const Mat& oldPts, const Mat& oldNrm, const Mat& newPts, const Mat& newNrm,
+template<typename TMat>
+void calcICPLsmMatricesFast(Matx33f cameraMatrix, const TMat& oldPts, const TMat& oldNrm, const TMat& newPts, const TMat& newNrm,
                             cv::Affine3f pose, int level, float maxDepthDiff, float angleThreshold, cv::Matx66f& A, cv::Vec6f& b);
 
 #ifdef HAVE_OPENCL
