@@ -33,6 +33,7 @@ public:
         OdometryFramePyramidType pyrType, size_t level) = 0;
     virtual void getPyramidAt(OutputArray img,
         OdometryFramePyramidType pyrType, size_t level) const = 0;
+    virtual OdometryFrameStoreType getStoreType() const = 0;
 };
 
 template<typename TMat>
@@ -59,6 +60,7 @@ public:
         OdometryFramePyramidType pyrType, size_t level) override;
     virtual void getPyramidAt(OutputArray img,
         OdometryFramePyramidType pyrType, size_t level) const override;
+    virtual OdometryFrameStoreType getStoreType() const override;
 
 private:
     void findMask(InputArray image);
@@ -108,6 +110,11 @@ void OdometryFrame::setPyramidAt(InputArray  img, OdometryFramePyramidType pyrTy
 void OdometryFrame::getPyramidAt(OutputArray img, OdometryFramePyramidType pyrType, size_t level) const
 {
     this->impl->getPyramidAt(img, pyrType, level);
+}
+
+OdometryFrameStoreType OdometryFrame::getStoreType() const
+{
+    return this->impl->getStoreType();
 }
 
 template<typename TMat>
@@ -219,7 +226,7 @@ void OdometryFrameImplTMat<TMat>::setPyramidLevel(size_t _nLevels, OdometryFrame
     if (oftype < OdometryFramePyramidType::N_PYRAMIDS)
         pyramids[oftype].resize(_nLevels, TMat());
     else
-        CV_Error(Error::StsBadArg, "Incorrect type.");
+        CV_Error(Error::StsBadArg, "Incorrect pyramid type");
 
 }
 
@@ -261,6 +268,12 @@ void OdometryFrameImplTMat<TMat>::getPyramidAt(OutputArray _img, OdometryFramePy
 }
 
 template<typename TMat>
+OdometryFrameStoreType OdometryFrameImplTMat<TMat>::getStoreType() const
+{
+    return (std::is_same<TMat, UMat>::value ? OdometryFrameStoreType::UMAT : OdometryFrameStoreType::MAT);
+}
+
+template<typename TMat>
 void OdometryFrameImplTMat<TMat>::findMask(InputArray _depth)
 {
     Mat depth_value = _depth.getMat();
@@ -269,7 +282,8 @@ void OdometryFrameImplTMat<TMat>::findMask(InputArray _depth)
     for (int y = 0; y < depth_value.rows; y++)
         for (int x = 0; x < depth_value.cols; x++)
         {
-            if (cvIsNaN(depth_value.at<float>(y, x)) || depth_value.at<float>(y, x) <= FLT_EPSILON)
+            float v = depth_value.at<float>(y, x);
+            if (cvIsNaN(v) || v <= FLT_EPSILON)
                 m.at<uchar>(y, x) = 0;
         }
     this->setMask(m);

@@ -62,6 +62,7 @@ public:
     size_t getPyramidLevels(OdometryFramePyramidType oftype) const;
     void setPyramidAt(InputArray  img, OdometryFramePyramidType pyrType, size_t level);
     void getPyramidAt(OutputArray img, OdometryFramePyramidType pyrType, size_t level) const;
+    OdometryFrameStoreType getStoreType() const;
 
     class Impl;
 private:
