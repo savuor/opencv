@@ -116,7 +116,10 @@ void prepareRGBFrameBase(OdometryFrame& frame, OdometrySettings settings, bool u
         checkDepth(depth, image.size());
     }
     else
+    {
+        //TODO: fix that, no need for empty image
         depth = TMat(image.size(), CV_32F, 1);
+    }
 
     TMat mask;
     frame.getMask(mask);
@@ -129,16 +132,8 @@ void prepareRGBFrameBase(OdometryFrame& frame, OdometrySettings settings, bool u
     }
     checkMask(mask, image.size());
 
-    //TODO: check if this compiles & works
     std::vector<int> iterCounts;
     settings.getIterCounts(iterCounts);
-    /*
-    std::vector<int> iterCounts;
-    Mat miterCounts;
-    settings.getIterCounts(miterCounts);
-    for (int i = 0; i < miterCounts.size().height; i++)
-        iterCounts.push_back(miterCounts.at<int>(i));
-    */
 
     std::vector<TMat> ipyramids;
     preparePyramidImage(image, ipyramids, iterCounts.size());
@@ -193,16 +188,8 @@ void prepareRGBFrameDst(OdometryFrame& frame, OdometrySettings settings)
 
     std::vector<TMat> dxpyramids, dypyramids, tmpyramids;
 
-    //TODO: check if it compiles & works
     std::vector<float> minGradientMagnitudes;
     settings.getMinGradientMagnitudes(minGradientMagnitudes);
-    /*
-    Mat _minGradientMagnitudes;
-    std::vector<float> minGradientMagnitudes;
-    settings.getMinGradientMagnitudes(_minGradientMagnitudes);
-    for (int i = 0; i < _minGradientMagnitudes.size().height; i++)
-        minGradientMagnitudes.push_back(_minGradientMagnitudes.at<float>(i));
-    */
 
     preparePyramidSobel<TMat>(ipyramids, 1, 0, dxpyramids, settings.getSobelSize());
     preparePyramidSobel<TMat>(ipyramids, 0, 1, dypyramids, settings.getSobelSize());
@@ -383,7 +370,7 @@ template<typename TMat>
 void setPyramids(OdometryFrame& odf, OdometryFramePyramidType oftype, InputArrayOfArrays pyramidImage)
 {
     size_t nLevels = pyramidImage.size(-1).width;
-    //TODO: check if this compiles & works
+    odf.setPyramidLevel(nLevels, oftype);
     for (size_t l = 0; l < nLevels; l++)
     {
         odf.setPyramidAt(getTMat<TMat>(pyramidImage, l), oftype, l);
@@ -648,7 +635,8 @@ void preparePyramidTexturedMask(InputArrayOfArrays pyramid_dI_dx, InputArrayOfAr
             pyramidMaskT.copyTo(pyramidMaskM);
             Mat texMask = texturedMask & pyramidMaskM;
 
-            randomSubsetOfMask<TMat>(texMask, (float)maxPointsPart);
+            //TODO: use UMats when the per-pixel code above is done in UMats
+            randomSubsetOfMask<Mat>(texMask, (float)maxPointsPart);
             texMask.copyTo(getTMat<TMat>(pyramidTexturedMask, (int)i));
         }
     }
