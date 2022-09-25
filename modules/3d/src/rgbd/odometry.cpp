@@ -122,7 +122,7 @@ bool OdometryICP<TMat>::compute(InputArray _srcFrame, InputArray _dstFrame, Outp
 
     prepareICPFrame<TMat>(srcFrame, dstFrame, this->settings, this->algtype);
 
-    bool isCorrect = compute<TMat>(srcFrame, dstFrame, Rt);
+    bool isCorrect = compute(srcFrame, dstFrame, Rt);
     return isCorrect;
 }
 
@@ -218,7 +218,7 @@ bool OdometryRGB<TMat>::compute(InputArray _srcFrame, InputArray _dstFrame, Outp
     srcFrame.setImage(_srcFrame);
     dstFrame.setImage(_dstFrame);
 
-    prepareRGBFrame(srcFrame, dstFrame, this->settings, false);
+    prepareRGBFrame<TMat>(srcFrame, dstFrame, this->settings, false);
 
     bool isCorrect = compute(srcFrame, dstFrame, Rt);
     return isCorrect;
@@ -299,11 +299,11 @@ bool OdometryRGBD<TMat>::compute(const OdometryFrame& srcFrame, const OdometryFr
     CV_CheckTypeEQ(miterCounts.type(), CV_32S, "");
     for (int i = 0; i < miterCounts.size().height; i++)
         iterCounts.push_back(miterCounts.at<int>(i));
-    bool isCorrect = RGBDICPOdometryImpl(Rt, Mat(), srcFrame, dstFrame, cameraMatrix,
-                                         this->settings.getMaxDepthDiff(), this->settings.getAngleThreshold(),
-                                         iterCounts, this->settings.getMaxTranslation(),
-                                         this->settings.getMaxRotation(), settings.getSobelScale(),
-                                         OdometryType::RGB_DEPTH, OdometryTransformType::RIGID_TRANSFORMATION, this->algtype);
+    bool isCorrect = RGBDICPOdometryImpl<TMat>(Rt, Mat(), srcFrame, dstFrame, cameraMatrix,
+                                               this->settings.getMaxDepthDiff(), this->settings.getAngleThreshold(),
+                                               iterCounts, this->settings.getMaxTranslation(),
+                                               this->settings.getMaxRotation(), settings.getSobelScale(),
+                                               OdometryType::RGB_DEPTH, OdometryTransformType::RIGID_TRANSFORMATION, this->algtype);
     return isCorrect;
 }
 
@@ -323,7 +323,7 @@ bool OdometryRGBD<TMat>::compute(InputArray _srcDepthFrame, InputArray _srcRGBFr
     dstFrame.setDepth(_dstDepthFrame);
     dstFrame.setImage(_dstRGBFrame);
 
-    prepareRGBDFrame(srcFrame, dstFrame, this->settings, this->algtype);
+    prepareRGBDFrame<TMat>(srcFrame, dstFrame, this->settings, this->algtype);
     bool isCorrect = compute(srcFrame, dstFrame, Rt);
     return isCorrect;
 }
@@ -332,7 +332,7 @@ bool OdometryRGBD<TMat>::compute(InputArray _srcDepthFrame, InputArray _srcRGBFr
 Odometry::Odometry()
 {
     OdometrySettings settings;
-    this->impl = makePtr<OdometryICP>(settings, OdometryAlgoType::COMMON);
+    this->impl = makePtr<OdometryICP<Mat>>(settings, OdometryAlgoType::COMMON);
 }
 
 Odometry::Odometry(OdometryType otype)

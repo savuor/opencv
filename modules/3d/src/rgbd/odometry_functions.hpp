@@ -272,7 +272,7 @@ void calcRgbdLsmMatrices(const TMat& cloud0, const Mat& Rt,
                          Mat& AtA, Mat& AtB, OdometryTransformType transformType);
 
 template<typename TMat>
-void calcICPLsmMatrices(const TMat& cloud0, const TMat& Rt,
+void calcICPLsmMatrices(const TMat& cloud0, const Mat& Rt,
                         const TMat& cloud1, const TMat& normals1,
                         const TMat& corresps,
                         Mat& AtA, Mat& AtB, OdometryTransformType transformType);
