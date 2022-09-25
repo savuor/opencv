@@ -33,6 +33,10 @@ class OdometryICP : public Odometry::Impl
 private:
     OdometrySettings settings;
     OdometryAlgoType algtype;
+    static OdometryFrameStoreType frameStoreType()
+    {
+        return std::is_same<TMat, UMat>::value ? OdometryFrameStoreType::UMAT : OdometryFrameStoreType::MAT;
+    }
 
 public:
     OdometryICP(OdometrySettings settings, OdometryAlgoType algtype);
@@ -75,18 +79,23 @@ OdometryFrame OdometryICP<TMat>::createOdometryFrame() const
 template<typename TMat>
 void OdometryICP<TMat>::prepareFrame(OdometryFrame& frame)
 {
+    CV_Assert(frame.getStoreType() == frameStoreType());
     prepareICPFrame<TMat>(frame, frame, this->settings, this->algtype);
 }
 
 template<typename TMat>
 void OdometryICP<TMat>::prepareFrames(OdometryFrame& srcFrame, OdometryFrame& dstFrame)
 {
+    CV_Assert(srcFrame.getStoreType() == frameStoreType());
+    CV_Assert(dstFrame.getStoreType() == frameStoreType());
     prepareICPFrame<TMat>(srcFrame, dstFrame, this->settings, this->algtype);
 }
 
 template<typename TMat>
 bool OdometryICP<TMat>::compute(const OdometryFrame& srcFrame, const OdometryFrame& dstFrame, OutputArray Rt) const
 {
+    CV_Assert(srcFrame.getStoreType() == frameStoreType());
+    CV_Assert(dstFrame.getStoreType() == frameStoreType());
     Matx33f cameraMatrix;
     settings.getCameraMatrix(cameraMatrix);
     std::vector<int> iterCounts;
@@ -129,6 +138,10 @@ class OdometryRGB : public Odometry::Impl
 private:
     OdometrySettings settings;
     OdometryAlgoType algtype;
+    static OdometryFrameStoreType frameStoreType()
+    {
+        return std::is_same<TMat, UMat>::value ? OdometryFrameStoreType::UMAT : OdometryFrameStoreType::MAT;
+    }
 
 public:
     OdometryRGB(OdometrySettings settings, OdometryAlgoType algtype);
@@ -164,18 +177,23 @@ OdometryFrame OdometryRGB<TMat>::createOdometryFrame() const
 template<typename TMat>
 void OdometryRGB<TMat>::prepareFrame(OdometryFrame& frame)
 {
+    CV_Assert(frame.getStoreType() == frameStoreType());
     prepareRGBFrame<TMat>(frame, frame, this->settings, false);
 }
 
 template<typename TMat>
 void OdometryRGB<TMat>::prepareFrames(OdometryFrame& srcFrame, OdometryFrame& dstFrame)
 {
+    CV_Assert(srcFrame.getStoreType() == frameStoreType());
+    CV_Assert(dstFrame.getStoreType() == frameStoreType());
     prepareRGBFrame<TMat>(srcFrame, dstFrame, this->settings, false);
 }
 
 template<typename TMat>
 bool OdometryRGB<TMat>::compute(const OdometryFrame& srcFrame, const OdometryFrame& dstFrame, OutputArray Rt) const
 {
+    CV_Assert(srcFrame.getStoreType() == frameStoreType());
+    CV_Assert(dstFrame.getStoreType() == frameStoreType());
     Matx33f cameraMatrix;
     settings.getCameraMatrix(cameraMatrix);
     std::vector<int> iterCounts;
@@ -218,6 +236,10 @@ class OdometryRGBD : public Odometry::Impl
 private:
     OdometrySettings settings;
     OdometryAlgoType algtype;
+    static OdometryFrameStoreType frameStoreType()
+    {
+        return std::is_same<TMat, UMat>::value ? OdometryFrameStoreType::UMAT : OdometryFrameStoreType::MAT;
+    }
 
 public:
     OdometryRGBD(OdometrySettings settings, OdometryAlgoType algtype);
@@ -252,18 +274,23 @@ OdometryFrame OdometryRGBD<TMat>::createOdometryFrame() const
 template<typename TMat>
 void OdometryRGBD<TMat>::prepareFrame(OdometryFrame& frame)
 {
-    prepareRGBDFrame(frame, frame, this->settings, this->algtype);
+    CV_Assert(frame.getStoreType() == frameStoreType());
+    prepareRGBDFrame<TMat>(frame, frame, this->settings, this->algtype);
 }
 
 template<typename TMat>
 void OdometryRGBD<TMat>::prepareFrames(OdometryFrame& srcFrame, OdometryFrame& dstFrame)
 {
-    prepareRGBDFrame(srcFrame, dstFrame, this->settings, this->algtype);
+    CV_Assert(srcFrame.getStoreType() == frameStoreType());
+    CV_Assert(dstFrame.getStoreType() == frameStoreType());
+    prepareRGBDFrame<TMat>(srcFrame, dstFrame, this->settings, this->algtype);
 }
 
 template<typename TMat>
 bool OdometryRGBD<TMat>::compute(const OdometryFrame& srcFrame, const OdometryFrame& dstFrame, OutputArray Rt) const
 {
+    CV_Assert(srcFrame.getStoreType() == frameStoreType());
+    CV_Assert(dstFrame.getStoreType() == frameStoreType());
     Matx33f cameraMatrix;
     settings.getCameraMatrix(cameraMatrix);
     std::vector<int> iterCounts;
@@ -308,20 +335,25 @@ Odometry::Odometry()
     this->impl = makePtr<OdometryICP>(settings, OdometryAlgoType::COMMON);
 }
 
-//TODO: this
 Odometry::Odometry(OdometryType otype)
 {
+#ifdef HAVE_OPENCL
+    using TMat = UMat;
+#else
+    using TMat = Mat;
+#endif
+
     OdometrySettings settings;
     switch (otype)
     {
     case OdometryType::DEPTH:
-        this->impl = makePtr<OdometryICP>(settings, OdometryAlgoType::FAST);
+        this->impl = makePtr<OdometryICP<TMat>>(settings, OdometryAlgoType::FAST);
         break;
     case OdometryType::RGB:
-        this->impl = makePtr<OdometryRGB>(settings, OdometryAlgoType::COMMON);
+        this->impl = makePtr<OdometryRGB<TMat>>(settings, OdometryAlgoType::COMMON);
         break;
     case OdometryType::RGB_DEPTH:
-        this->impl = makePtr<OdometryRGBD>(settings, OdometryAlgoType::COMMON);
+        this->impl = makePtr<OdometryRGBD<TMat>>(settings, OdometryAlgoType::COMMON);
         break;
     default:
         CV_Error(Error::StsInternal,
@@ -331,18 +363,19 @@ Odometry::Odometry(OdometryType otype)
 }
 
 //TODO: this
-Odometry::Odometry(OdometryType otype, OdometrySettings settings, OdometryAlgoType algtype)
+Odometry::Odometry(OdometryType otype, OdometrySettings settings, OdometryAlgoType algtype, OdometryFrameStoreType storeType)
 {
+    bool umats = storeType == OdometryFrameStoreType::UMAT;
     switch (otype)
     {
     case OdometryType::DEPTH:
-        this->impl = makePtr<OdometryICP>(settings, algtype);
+        this->impl = umats ? makePtr<OdometryICP<UMat>>(settings, algtype).dynamicCast<Odometry::Impl>() : makePtr<OdometryICP<Mat>>(settings, algtype).dynamicCast<Odometry::Impl>();
         break;
     case OdometryType::RGB:
-        this->impl = makePtr<OdometryRGB>(settings, algtype);
+        this->impl = umats ? makePtr<OdometryRGB<UMat>>(settings, algtype).dynamicCast<Odometry::Impl>() : makePtr<OdometryRGB<Mat>>(settings, algtype).dynamicCast<Odometry::Impl>();
         break;
     case OdometryType::RGB_DEPTH:
-        this->impl = makePtr<OdometryRGBD>(settings, algtype);
+        this->impl = umats ? makePtr<OdometryRGBD<UMat>>(settings, algtype).dynamicCast<Odometry::Impl>() : makePtr<OdometryRGBD<Mat>>(settings, algtype).dynamicCast<Odometry::Impl>();
         break;
     default:
         CV_Error(Error::StsInternal,
