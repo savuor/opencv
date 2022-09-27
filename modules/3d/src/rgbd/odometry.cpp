@@ -98,6 +98,7 @@ bool OdometryICP<TMat>::compute(const OdometryFrame& srcFrame, const OdometryFra
     CV_Assert(dstFrame.getStoreType() == frameStoreType());
     Matx33f cameraMatrix;
     settings.getCameraMatrix(cameraMatrix);
+    //TODO: remove this var
     std::vector<int> iterCounts;
     Mat miterCounts;
     settings.getIterCounts(miterCounts);
@@ -197,6 +198,7 @@ bool OdometryRGB<TMat>::compute(const OdometryFrame& srcFrame, const OdometryFra
     Matx33f cameraMatrix;
     settings.getCameraMatrix(cameraMatrix);
     std::vector<int> iterCounts;
+    //TODO: remove this var
     Mat miterCounts;
     settings.getIterCounts(miterCounts);
     CV_CheckTypeEQ(miterCounts.type(), CV_32S, "");
@@ -293,6 +295,7 @@ bool OdometryRGBD<TMat>::compute(const OdometryFrame& srcFrame, const OdometryFr
     CV_Assert(dstFrame.getStoreType() == frameStoreType());
     Matx33f cameraMatrix;
     settings.getCameraMatrix(cameraMatrix);
+    //TODO: remove this var
     std::vector<int> iterCounts;
     Mat miterCounts;
     settings.getIterCounts(miterCounts);

@@ -637,7 +637,7 @@ void preparePyramidTexturedMask(InputArrayOfArrays pyramid_dI_dx, InputArrayOfAr
 
             //TODO: use UMats when the per-pixel code above is done in UMats
             randomSubsetOfMask<Mat>(texMask, (float)maxPointsPart);
-            texMask.copyTo(getTMat<TMat>(pyramidTexturedMask, (int)i));
+            texMask.copyTo(getTMatRef<TMat>(pyramidTexturedMask, (int)i));
         }
     }
 }
