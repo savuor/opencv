@@ -1545,7 +1545,11 @@ double cv::threshold( InputArray _src, OutputArray _dst, double thresh, double m
                 ocl_threshold(_src, _dst, thresh, maxval, type), thresh)
 
     Mat src = _src.getMat();
-    int automatic_thresh = (type & ~CV_THRESH_MASK);
+
+    _dst.create( src.size(), src.type() );
+    Mat dst = _dst.getMat();
+
+    int automatic_thresh = (type & ~cv::THRESH_MASK);
     type &= THRESH_MASK;
 
     CV_Assert( automatic_thresh != (CV_THRESH_OTSU | CV_THRESH_TRIANGLE) );
@@ -1553,6 +1557,10 @@ double cv::threshold( InputArray _src, OutputArray _dst, double thresh, double m
     {
         int src_type = src.type();
         CV_CheckType(src_type, src_type == CV_8UC1 || src_type == CV_16UC1, "THRESH_OTSU mode");
+
+        CALL_HAL_RET(thresholdOtsu, cv_hal_threshold_otsu, thresh, src.data, src.step, dst.data, dst.step,
+                     src.cols, src.rows, src_type, maxval, type);
+
         thresh = src.type() == CV_8UC1 ? getThreshVal_Otsu_8u( src )
                                        : getThreshVal_Otsu_16u( src );
     }
@@ -1561,9 +1569,6 @@ double cv::threshold( InputArray _src, OutputArray _dst, double thresh, double m
         CV_Assert( src.type() == CV_8UC1 );
         thresh = getThreshVal_Triangle_8u( src );
     }
-
-    _dst.create( src.size(), src.type() );
-    Mat dst = _dst.getMat();
 
     if( src.depth() == CV_8U )
     {
