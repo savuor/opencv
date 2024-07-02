@@ -2,8 +2,41 @@
 #include "fastcv.h"
 #include <cstdint>
 #include <stdio.h>
+#include <mutex>
 
-static bool isInitialized = false;
+struct FastCvContext
+{
+public:
+    FastCvContext() : mut(), isInitialized(false) { }
+    ~FastCvContext() { }
+
+    bool init()
+    {
+        if (!isInitialized)
+        {
+            const std::lock_guard<std::mutex> lock(mut);
+            if (!isInitialized) // double-checked locking
+            {
+                if (fcvSetOperationMode(FASTCV_OP_PERFORMANCE) != 0)
+                {
+                    return false;
+                }
+                else
+                {
+                    printf("operation mode switched\n");
+                    isInitialized = true;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    std::mutex mut;
+    bool isInitialized;
+};
+
+static FastCvContext context;
 
 static const char* getFastCVErrorString(fcvStatus status)
 {
@@ -23,6 +56,11 @@ static const char* getFastCVErrorString(fcvStatus status)
 
 int fastcv_hal_add_8u(const uchar *a, size_t astep, const uchar *b, size_t bstep, uchar *c, size_t cstep, int w, int h)
 {
+    if (!context.init())
+    {
+        return CV_HAL_ERROR_UNKNOWN;
+    }
+
     printf("width: %d, height: %d\n", w, h);
     printf("astep: %zu, bstep: %zu, cstep: %zu\n", astep, bstep, cstep);
 
@@ -55,17 +93,9 @@ int fastcv_hal_add_8u(const uchar *a, size_t astep, const uchar *b, size_t bstep
 int fastcv_hal_setto_mask(uchar *dst_data, int dst_step, int dst_cols, int dst_rows,
                           const uchar* mask_data, int mask_step, uchar *value_data, int value_size)
 {
-    if (!isInitialized)
+    if (!context.init())
     {
-        if (fcvSetOperationMode(FASTCV_OP_PERFORMANCE) != 0)
-        {
-            return CV_HAL_ERROR_UNKNOWN;
-        }
-        else
-        {
-            printf("operation mode switched\n");
-            isInitialized = true;
-        }
+        return CV_HAL_ERROR_UNKNOWN;
     }
 
     // 128-bit alignment check
