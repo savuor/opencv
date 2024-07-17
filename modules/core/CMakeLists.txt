@@ -197,6 +197,9 @@ endif()
 ocv_add_accuracy_tests()
 ocv_add_perf_tests()
 
+#DEBUG
+target_include_directories(opencv_perf_core PRIVATE ${FASTCV_DIR}/inc)
+
 ocv_install_3rdparty_licenses(SoftFloat "${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/SoftFloat/COPYING.txt")
 
 

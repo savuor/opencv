@@ -1,5 +1,7 @@
 #include "perf_precomp.hpp"
 
+#include "fastcv.h"
+
 namespace opencv_test
 {
 using namespace perf;
@@ -132,12 +134,57 @@ PERF_TEST_P(Size_MatType, Mat_SetToWithMask,
     Mat src(size, type), mask(size, CV_8UC1);
     declare.in(src, mask, WARMUP_RNG).out(src);
 
-    //DEBUG
-    //printf("run:\n");
+    fcvSetOperationMode(FASTCV_OP_PERFORMANCE);
+
+    Mat valBuf(1, 16, type);
+    valBuf.setTo(sc);
+    uchar* value_data = valBuf.data;
 
     TEST_CYCLE()
     {
-        src.setTo(sc, mask);
+        //src.setTo(sc, mask);
+
+        switch (src.elemSize())
+        {
+            case 1:
+            {
+                uchar value = *value_data;
+                fcvSetElementsu8(src.data, src.cols, src.rows, src.step, value, mask.data, mask.step);
+                break;
+            }
+            case 3:
+            {
+                uchar v0, v1, v2;
+                v0 = value_data[0]; v1 = value_data[1]; v2 = value_data[2];
+                fcvSetElementsc3u8(src.data, src.cols, src.rows, src.step, v0, v1, v2, mask.data, mask.step);
+                break;
+            }
+            case 4:
+            {
+                int32_t value = ((int32_t*)value_data)[0];
+                fcvSetElementss32((int32_t*)src.data, src.cols, src.rows, src.step, value, mask.data, mask.step);
+                break;
+            }
+            case 3*4:
+            {
+                int32_t v0, v1, v2;
+                v0 = ((int32_t*)value_data)[0]; v1 = ((int32_t*)value_data)[1]; v2 = ((int32_t*)value_data)[2];
+                fcvSetElementsc3s32((int32_t*)src.data, src.cols, src.rows, src.step, v0, v1, v2, mask.data, mask.step);
+                break;
+            }
+            case 4*4:
+            {
+                int32_t v0, v1, v2, v3;
+                v0 = ((int32_t*)value_data)[0]; v1 = ((int32_t*)value_data)[1]; v2 = ((int32_t*)value_data)[2]; v3 = ((int32_t*)value_data)[3];
+                fcvSetElementsc4s32((int*)src.data, src.cols, src.rows, src.step, v0, v1, v2, v3, mask.data, mask.step);
+                break;
+            }
+        default:
+            {
+                // fallback
+                src.setTo(sc, mask);
+            }
+        }
     }
 
     SANITY_CHECK(src);
@@ -158,12 +205,57 @@ PERF_TEST_P(Size_MatType, Mat_SetToNoMask,
     Mat src(size, type);
     declare.in(src, WARMUP_RNG).out(src);
 
-    //DEBUG
-    //printf("run:\n");
+    fcvSetOperationMode(FASTCV_OP_PERFORMANCE);
+
+    Mat valBuf(1, 16, type);
+    valBuf.setTo(sc);
+    uchar* value_data = valBuf.data;
 
     TEST_CYCLE()
     {
-        src.setTo(sc);
+        //src.setTo(sc);
+
+        switch (src.elemSize())
+        {
+            case 1:
+            {
+                uchar value = *value_data;
+                fcvSetElementsu8(src.data, src.cols, src.rows, src.step, value, nullptr, 0);
+                break;
+            }
+            case 3:
+            {
+                uchar v0, v1, v2;
+                v0 = value_data[0]; v1 = value_data[1]; v2 = value_data[2];
+                fcvSetElementsc3u8(src.data, src.cols, src.rows, src.step, v0, v1, v2, nullptr, 0);
+                break;
+            }
+            case 4:
+            {
+                int32_t value = ((int32_t*)value_data)[0];
+                fcvSetElementss32((int32_t*)src.data, src.cols, src.rows, src.step, value, nullptr, 0);
+                break;
+            }
+            case 3*4:
+            {
+                int32_t v0, v1, v2;
+                v0 = ((int32_t*)value_data)[0]; v1 = ((int32_t*)value_data)[1]; v2 = ((int32_t*)value_data)[2];
+                fcvSetElementsc3s32((int32_t*)src.data, src.cols, src.rows, src.step, v0, v1, v2, nullptr, 0);
+                break;
+            }
+            case 4*4:
+            {
+                int32_t v0, v1, v2, v3;
+                v0 = ((int32_t*)value_data)[0]; v1 = ((int32_t*)value_data)[1]; v2 = ((int32_t*)value_data)[2]; v3 = ((int32_t*)value_data)[3];
+                fcvSetElementsc4s32((int*)src.data, src.cols, src.rows, src.step, v0, v1, v2, v3, nullptr, 0);
+                break;
+            }
+        default:
+            {
+                // fallback
+                src.setTo(sc);
+            }
+        }
     }
 
     SANITY_CHECK(src);
