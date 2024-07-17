@@ -1,16 +1,20 @@
+
 add_library(fastcv_hal STATIC fastcv_hal.cpp fastcv_hal.hpp)
 target_include_directories(fastcv_hal PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}
-  ${CMAKE_SOURCE_DIR}/modules/core/include
-  ${CMAKE_SOURCE_DIR}/modules/imgproc/include
-  fastcv_hal PRIVATE ${FASTCV_DIR}/inc)
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/modules/core/include
+    ${CMAKE_SOURCE_DIR}/modules/imgproc/include
+    fastcv_hal PRIVATE ${FASTCV_DIR}/inc)
 
 if(ARM)
-  set(FASTCV_LIB "lib/Android/lib32/libfastcv.a")
+    set(FASTCV_LIB "lib/Android/lib32/libfastcv.a")
 elseif(AARCH64)
-  set(FASTCV_LIB "lib/Android/lib64/libfastcv.a")
+    set(FASTCV_LIB "lib/Android/lib64/libfastcv.a")
 else()
-  message(FATAL_ERROR "FastCV supports ARM platform only!")
+    # to enable proper code analysis in your favourite IDE you may want to
+    # replace FATAL_ERROR by WARNING
+    #message(FATAL_ERROR "FastCV supports ARM platform only!")
+    message(WARNING "FastCV supports ARM platform only!")
 endif()
 
 target_link_libraries(fastcv_hal PUBLIC ${FASTCV_DIR}/${FASTCV_LIB})

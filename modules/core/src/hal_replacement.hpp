@@ -499,7 +499,6 @@ inline int hal_ni_setto_mask(uchar *dst_data, int dst_step, int dst_cols, int ds
 #define cv_hal_setto_mask hal_ni_setto_mask
 //! @endcond
 
-
 /**
 @param x source X arrays
 @param y source Y arrays
