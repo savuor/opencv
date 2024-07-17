@@ -2,41 +2,34 @@
 #include "fastcv.h"
 #include <cstdint>
 #include <stdio.h>
-#include <mutex>
+#include <opencv2/core/utils/logger.hpp>
 
 struct FastCvContext
 {
 public:
-    FastCvContext() : mut(), isInitialized(false) { }
-    ~FastCvContext() { }
-
-    bool init()
+    // initialize at first call
+    static FastCvContext& getContext()
     {
-        if (!isInitialized)
-        {
-            const std::lock_guard<std::mutex> lock(mut);
-            if (!isInitialized) // double-checked locking
-            {
-                if (fcvSetOperationMode(FASTCV_OP_PERFORMANCE) != 0)
-                {
-                    return false;
-                }
-                else
-                {
-                    printf("operation mode switched\n");
-                    isInitialized = true;
-                }
-            }
-        }
-
-        return true;
+        static FastCvContext context;
+        return context;
     }
 
-    std::mutex mut;
+    FastCvContext()
+    {
+        if (fcvSetOperationMode(FASTCV_OP_PERFORMANCE) != 0)
+        {
+            CV_LOG_WARNING(NULL, "Failed to switch FastCV operation mode");
+            isInitialized = false;
+        }
+        else
+        {
+            CV_LOG_INFO(NULL, "FastCV operation mode switched");
+            isInitialized = true;
+        }
+    }
+
     bool isInitialized;
 };
-
-static FastCvContext context;
 
 static const char* getFastCVErrorString(fcvStatus status)
 {
@@ -56,7 +49,7 @@ static const char* getFastCVErrorString(fcvStatus status)
 
 int fastcv_hal_add_8u(const uchar *a, size_t astep, const uchar *b, size_t bstep, uchar *c, size_t cstep, int w, int h)
 {
-    if (!context.init())
+    if (!FastCvContext::getContext().isInitialized)
     {
         return CV_HAL_ERROR_UNKNOWN;
     }
@@ -93,7 +86,7 @@ int fastcv_hal_add_8u(const uchar *a, size_t astep, const uchar *b, size_t bstep
 int fastcv_hal_setto_mask(uchar *dst_data, int dst_step, int dst_cols, int dst_rows,
                           const uchar* mask_data, int mask_step, uchar *value_data, int value_size)
 {
-    if (!context.init())
+    if (!FastCvContext::getContext().isInitialized)
     {
         return CV_HAL_ERROR_UNKNOWN;
     }
@@ -104,15 +97,6 @@ int fastcv_hal_setto_mask(uchar *dst_data, int dst_step, int dst_cols, int dst_r
         printf("ptr %% 16 break\n");
         return CV_HAL_ERROR_NOT_IMPLEMENTED;
     }
-
-    // stride should be miltiple of 8
-    // if ((dst_step % 8) || (mask_step % 8))
-    // {
-    //     printf("stride %% 8 break\n");
-    //     return CV_HAL_ERROR_NOT_IMPLEMENTED;
-    // }
-
-    //printf("HAL setto\n");
 
     switch (value_size)
     {
@@ -155,3 +139,4 @@ int fastcv_hal_setto_mask(uchar *dst_data, int dst_step, int dst_cols, int dst_r
 
     return CV_HAL_ERROR_OK;
 }
+
