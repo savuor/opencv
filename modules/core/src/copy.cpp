@@ -628,6 +628,30 @@ Mat& Mat::setTo(InputArray _value, InputArray _mask)
 
     CV_IPP_RUN_FAST(ipp_Mat_setTo_Mat(*this, value, mask), *this)
 
+    if ( dims <= 2 && channels() <= 4 && mcn == 1)
+    {
+        uchar valueBuf[sizeof(double) * 4];
+        convertAndUnrollScalar( value, type(), valueBuf, sizeof(valueBuf) );
+
+        //DEBUG
+        // const char* dp = (this->depth() == CV_8U) ? "8U" :
+        //                  (this->depth() == CV_8S) ? "8S" :
+        //                  (this->depth() == CV_16U) ? "16U" :
+        //                  (this->depth() == CV_16S) ? "16S" :
+        //                  (this->depth() == CV_32S) ? "32S" :
+        //                  (this->depth() == CV_32F) ? "32F" :
+        //                  (this->depth() == CV_64F) ? "64F" : "???";
+        // printf("m: %dx%d %sx%d\n", this->cols, this->rows, dp, this->channels());
+
+        int esz = this->elemSize();
+        int res = cv_hal_setto_mask(this->data, this->step, this->cols, this->rows,
+                                    mask.data, mask.step, valueBuf, esz);
+        if (res == CV_HAL_ERROR_OK)
+            return *this;
+        else if (res != CV_HAL_ERROR_NOT_IMPLEMENTED)
+            CV_Error_(cv::Error::StsInternal, ("HAL implementation setTo ==> " CVAUX_STR(cv_hal_setto_mask) " returned %d (0x%08x)", res, res));
+    }
+
     size_t esz = mcn > 1 ? elemSize1() : elemSize();
     BinaryFunc copymask = getCopyMaskFunc(esz);
 
