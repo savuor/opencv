@@ -873,7 +873,8 @@ int fastcv_hal_pyrdown(
         cv::parallel_for_(cv::Range(0, nStripes),
                   FcvPyrLoop_Invoker(src, src_width, src_height, dst, border_type, 5, stripeHeight, nStripes), nStripes);
 
-        return CV_HAL_ERROR_OK;
+        fcvStatus status = FASTCV_SUCCESS;
+        CV_HAL_RETURN(status, hal_pyrdown);
     }
 }
 
@@ -927,7 +928,8 @@ int fastcv_hal_cvtBGRtoHSV(
                       fcvColorRGB888ToHSV888u8(yS, width, sHeight, src_step, yD, dst_step);
                       }, nStripes);
 
-    return CV_HAL_ERROR_OK;
+    fcvStatus status = FASTCV_SUCCESS;
+    CV_HAL_RETURN(status, hal_BGRtoHSV);
 }
 
 int fastcv_hal_cvtBGRtoYUVApprox(
@@ -975,5 +977,6 @@ int fastcv_hal_cvtBGRtoYUVApprox(
                       fcvColorRGB888toYCrCbu8_v3(yS, width, sHeight, src_step, yD, dst_step);
                       }, nStripes);
 
-    return CV_HAL_ERROR_OK;
+    fcvStatus status = FASTCV_SUCCESS;
+    CV_HAL_RETURN(status, hal_BGRtoYUVApprox);
 }
